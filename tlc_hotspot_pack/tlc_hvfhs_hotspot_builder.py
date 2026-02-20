@@ -1,11 +1,12 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
-TLC HVFHV Hotspot Builder (Dynamic Ratings + Zone Polygons + GOOD/BAD Markers)
-Optimized so the browser doesn't hang:
-- Markers: show ALL selected GOOD/BAD zones (overall)
-- Time slider polygons: show only top/bottom zones PER window (hour/day) to keep HTML small
-- Optional hour binning (e.g., 2-hour windows)
-- Simplify taxi-zone polygons to reduce GeoJSON size
+TLC HVFHV Hotspot Builder (20-min slider ready)
+- Builds a Folium map with:
+  1) Static GOOD/BAD markers (overall selection)
+  2) Time-slider polygons (top/bottom zones per time window to keep HTML small)
+- Supports true minute-level binning (e.g., 20 minutes)
+- Rating scale is 1–100 (not 1–10)
+- Slider label uses AM/PM format
 
 Output:
 - outputs/hotspots_timeslider_zones.html
@@ -65,8 +66,10 @@ def fetch_taxi_zones(meta_dir: Path) -> Tuple[gpd.GeoDataFrame, pd.DataFrame]:
     shp_files = list(extract_dir.rglob("*.shp"))
     if not shp_files:
         raise ValueError("Could not find .shp in taxi_zones_extracted")
+
     zones_gdf = gpd.read_file(shp_files[0])
 
+    # Ensure LocationID exists
     if "LocationID" not in zones_gdf.columns:
         cols_lower = {c.lower(): c for c in zones_gdf.columns}
         if "locationid" in cols_lower:
@@ -74,10 +77,11 @@ def fetch_taxi_zones(meta_dir: Path) -> Tuple[gpd.GeoDataFrame, pd.DataFrame]:
         else:
             raise ValueError(f"Taxi zones shapefile missing LocationID. Columns: {list(zones_gdf.columns)}")
 
+    # Ensure CRS
     if zones_gdf.crs is None:
         zones_gdf = zones_gdf.set_crs("EPSG:4326", allow_override=True)
-
     zones_gdf = zones_gdf.to_crs(epsg=4326)
+
     return zones_gdf, lookup_df
 
 
@@ -96,6 +100,7 @@ def lerp(a: float, b: float, t: float) -> float:
 
 
 def score_to_color_hex(score01: float) -> str:
+    """Red -> Yellow -> Green gradient based on score in [0,1]."""
     s = max(0.0, min(1.0, float(score01)))
     if s <= 0.5:
         t = s / 0.5
@@ -110,9 +115,10 @@ def score_to_color_hex(score01: float) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
-def score_to_rating_1_10(score01: float) -> int:
+def score_to_rating_1_100(score01: float) -> int:
+    """Maps score in [0,1] to integer rating [1,100]."""
     s = max(0.0, min(1.0, float(score01)))
-    return int(round(1 + 9 * s))
+    return int(round(1 + 99 * s))
 
 
 def safe_float(x):
@@ -125,6 +131,11 @@ def safe_float(x):
 
 
 def build_metrics(files: List[Path]) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Returns:
+      df_total: per-zone totals (pickups_total, avg_driver_pay_all, avg_tips_all)
+      df_win_raw: per-zone per-(dow,hour,minute) aggregates
+    """
     con = duckdb.connect(database=":memory:")
     parquet_list = [str(f) for f in files]
     parquet_sql = ", ".join("'" + p.replace("'", "''") + "'" for p in parquet_list)
@@ -148,6 +159,7 @@ def build_metrics(files: List[Path]) -> Tuple[pd.DataFrame, pd.DataFrame]:
     GROUP BY 1;
     """
 
+    # Include minute so we can truly bin by 20 minutes
     sql_win = f"""
     WITH base AS (
       SELECT
@@ -163,8 +175,9 @@ def build_metrics(files: List[Path]) -> Tuple[pd.DataFrame, pd.DataFrame]:
     )
     SELECT
       PULocationID,
-      EXTRACT('dow' FROM pickup_datetime) AS dow_i,  -- 0=Sun..6=Sat
+      EXTRACT('dow' FROM pickup_datetime) AS dow_i,   -- 0=Sun..6=Sat
       EXTRACT('hour' FROM pickup_datetime) AS hour,
+      EXTRACT('minute' FROM pickup_datetime) AS minute,
       COUNT(*) AS pickups,
       AVG(trip_miles) AS avg_trip_miles,
       AVG(trip_time)/60.0 AS avg_trip_minutes,
@@ -172,22 +185,29 @@ def build_metrics(files: List[Path]) -> Tuple[pd.DataFrame, pd.DataFrame]:
       AVG(base_passenger_fare) AS avg_base_fare,
       AVG(tips) AS avg_tips
     FROM base
-    GROUP BY 1,2,3;
+    GROUP BY 1,2,3,4;
     """
 
     df_total = con.execute(sql_total).df()
-    df_win = con.execute(sql_win).df()
+    df_win_raw = con.execute(sql_win).df()
 
-    df_win["dow_i"] = df_win["dow_i"].astype(int)
-    df_win["dow_m"] = df_win["dow_i"].apply(lambda d: 6 if d == 0 else d - 1)
+    df_win_raw["dow_i"] = df_win_raw["dow_i"].astype(int)
+    # Convert to Monday=0 .. Sunday=6
+    df_win_raw["dow_m"] = df_win_raw["dow_i"].apply(lambda d: 6 if d == 0 else d - 1)
     dow_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    df_win["dow"] = df_win["dow_m"].apply(lambda i: dow_names[int(i)])
-    df_win["hour"] = df_win["hour"].astype(int)
+    df_win_raw["dow"] = df_win_raw["dow_m"].apply(lambda i: dow_names[int(i)])
 
-    return df_total, df_win
+    df_win_raw["hour"] = df_win_raw["hour"].astype(int)
+    df_win_raw["minute"] = df_win_raw["minute"].astype(int)
+
+    return df_total, df_win_raw
 
 
 def add_window_scores(df_win: pd.DataFrame) -> pd.DataFrame:
+    """
+    Scores within each time window (dow_m + minute_of_day):
+      score01 = 0.60*vol + 0.30*pay + 0.10*tips
+    """
     df = df_win.copy()
 
     def minmax(s: pd.Series) -> pd.Series:
@@ -198,12 +218,13 @@ def add_window_scores(df_win: pd.DataFrame) -> pd.DataFrame:
             return pd.Series([0.0] * len(s2), index=s2.index)
         return (s2 - mn) / (mx - mn)
 
-    df["vol_n"] = df.groupby(["dow_m", "hour"])["pickups"].transform(minmax)
-    df["pay_n"] = df.groupby(["dow_m", "hour"])["avg_driver_pay"].transform(minmax)
-    df["tip_n"] = df.groupby(["dow_m", "hour"])["avg_tips"].transform(minmax)
+    key = ["dow_m", "minute_of_day"]
+    df["vol_n"] = df.groupby(key)["pickups"].transform(minmax)
+    df["pay_n"] = df.groupby(key)["avg_driver_pay"].transform(minmax)
+    df["tip_n"] = df.groupby(key)["avg_tips"].transform(minmax)
 
     df["score01"] = (0.60 * df["vol_n"]) + (0.30 * df["pay_n"]) + (0.10 * df["tip_n"])
-    df["rating_1_10"] = df["score01"].apply(score_to_rating_1_10)
+    df["rating_1_100"] = df["score01"].apply(score_to_rating_1_100)
     df["color_hex"] = df["score01"].apply(score_to_color_hex)
     return df
 
@@ -217,18 +238,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--good_n", type=int, default=200)
     p.add_argument("--bad_n", type=int, default=120)
 
-    # polygon selection PER window (keeps HTML small)
+    # polygon selection per window (keeps HTML small)
     p.add_argument("--win_good_n", type=int, default=80)
     p.add_argument("--win_bad_n", type=int, default=40)
 
     p.add_argument("--min_trips_per_window", type=int, default=10)
 
-    # reduce frames: 1=hourly, 2=2-hour bins, 3=3-hour bins...
-    p.add_argument("--hour_bin", type=int, default=2)
+    # If bin_minutes is set, it overrides hour_bin.
+    # Default is 20 minutes (what you asked for).
+    p.add_argument("--bin_minutes", type=int, default=20, help="time bin in minutes (overrides hour_bin)")
+    p.add_argument("--hour_bin", type=int, default=2, help="legacy hour bin (used only if --bin_minutes is None)")
 
-    
-    parser.add_argument("--bin_minutes", type=int, default=None, help="time bin in minutes (overrides hour_bin)")
-# simplify polygons in meters (0 disables)
+    # simplify polygons in meters (0 disables)
     p.add_argument("--simplify_meters", type=float, default=25.0)
 
     p.add_argument("--out_dir", type=str, default="outputs")
@@ -245,54 +266,73 @@ def main() -> int:
     ensure_dir(meta_dir)
 
     files = month_files(data_dir, args.months)
-    df_total, df_win = build_metrics(files)
+    df_total, df_win_raw = build_metrics(files)
 
-    # Select overall GOOD + BAD zones (for markers)
+    # Select overall GOOD + BAD zones (markers) by total pickup volume
     df_total = df_total.sort_values("pickups_total", ascending=False).copy()
     good_ids = df_total.head(int(args.good_n))["PULocationID"].astype(int).tolist()
     bad_pool = df_total[~df_total["PULocationID"].astype(int).isin(set(good_ids))].copy()
     bad_ids = bad_pool.sort_values("pickups_total", ascending=True).head(int(args.bad_n))["PULocationID"].astype(int).tolist()
     shown_ids = sorted(set(good_ids + bad_ids))
-
     good_set = set(good_ids)
     bad_set = set(bad_ids)
 
-    # Bin hours if requested
-    hour_bin = max(1, int(args.hour_bin))
-    df_win["hour_bin"] = (df_win["hour"] // hour_bin) * hour_bin
-    df_win = df_win.drop(columns=["hour"]).rename(columns={"hour_bin": "hour"})
+    # Compute time bin (minutes)
+    if args.bin_minutes is not None:
+        bin_minutes = max(1, int(args.bin_minutes))
+    else:
+        hour_bin = max(1, int(args.hour_bin))
+        bin_minutes = hour_bin * 60
+
+    # Bin minute into buckets
+    dfw = df_win_raw.copy()
+    dfw["minute_bin"] = (dfw["minute"] // bin_minutes) * bin_minutes
+    dfw["minute_of_day"] = (dfw["hour"] * 60) + dfw["minute_bin"]
+
+    # Re-aggregate at the requested bin size
+    # (We already grouped at exact minute in SQL; now we roll up into bin)
+    dfw = (
+        dfw.groupby(["PULocationID", "dow_m", "dow", "minute_of_day"], as_index=False)
+        .agg(
+            pickups=("pickups", "sum"),
+            avg_trip_miles=("avg_trip_miles", "mean"),
+            avg_trip_minutes=("avg_trip_minutes", "mean"),
+            avg_driver_pay=("avg_driver_pay", "mean"),
+            avg_base_fare=("avg_base_fare", "mean"),
+            avg_tips=("avg_tips", "mean"),
+        )
+    )
 
     # Filter low-signal windows
-    df_win = df_win[df_win["pickups"] >= int(args.min_trips_per_window)].copy()
+    dfw = dfw[dfw["pickups"] >= int(args.min_trips_per_window)].copy()
 
-    df_win_scored = add_window_scores(df_win)
-    df_win_scored = df_win_scored[df_win_scored["PULocationID"].astype(int).isin(shown_ids)].copy()
+    # Score
+    dfw_scored = add_window_scores(dfw)
+    dfw_scored = dfw_scored[dfw_scored["PULocationID"].astype(int).isin(shown_ids)].copy()
 
     # Per-window TOP/BOTTOM selection (critical optimization)
     win_good_n = int(args.win_good_n)
     win_bad_n = int(args.win_bad_n)
 
-    dfw = df_win_scored.copy()
-    dfw["rank_good"] = dfw.groupby(["dow_m", "hour"])["score01"].rank(method="first", ascending=False)
-    dfw["rank_bad"] = dfw.groupby(["dow_m", "hour"])["score01"].rank(method="first", ascending=True)
+    dfw_scored["rank_good"] = dfw_scored.groupby(["dow_m", "minute_of_day"])["score01"].rank(method="first", ascending=False)
+    dfw_scored["rank_bad"] = dfw_scored.groupby(["dow_m", "minute_of_day"])["score01"].rank(method="first", ascending=True)
+    df_poly = dfw_scored[(dfw_scored["rank_good"] <= win_good_n) | (dfw_scored["rank_bad"] <= win_bad_n)].copy()
 
-    df_poly = dfw[(dfw["rank_good"] <= win_good_n) | (dfw["rank_bad"] <= win_bad_n)].copy()
-
-    # Overall for marker popup
+    # Overall stats for marker popup
     df_overall = (
-        df_win_scored.groupby("PULocationID", as_index=False)
+        dfw_scored.groupby("PULocationID", as_index=False)
         .agg(
             score01_mean=("score01", "mean"),
-            rating_mean=("rating_1_10", "mean"),
             pickups_window_sum=("pickups", "sum"),
             avg_driver_pay_mean=("avg_driver_pay", "mean"),
             avg_tips_mean=("avg_tips", "mean"),
         )
     )
-    df_overall["rating_overall_1_10"] = df_overall["score01_mean"].apply(score_to_rating_1_10)
+    df_overall["rating_overall_1_100"] = df_overall["score01_mean"].apply(score_to_rating_1_100)
     df_overall["color_overall"] = df_overall["score01_mean"].apply(score_to_color_hex)
     overall_by_id = df_overall.set_index("PULocationID").to_dict(orient="index")
 
+    # Geo data
     zones_gdf, lookup_df = fetch_taxi_zones(meta_dir)
     lookup_df = lookup_df.copy()
     lookup_df["LocationID"] = lookup_df["LocationID"].astype(int)
@@ -301,7 +341,7 @@ def main() -> int:
     zones_gdf = zones_gdf[zones_gdf["LocationID"].astype(int).isin(shown_ids)].copy()
     zones_gdf["LocationID"] = zones_gdf["LocationID"].astype(int)
 
-    # Simplify polygons for huge size reduction (in meters)
+    # Simplify polygons for size reduction (meters)
     if float(args.simplify_meters) > 0:
         tol = float(args.simplify_meters)
         z3857 = zones_gdf.to_crs(epsg=3857)
@@ -327,11 +367,13 @@ def main() -> int:
             zone_name = str(row.get("Zone", zone_name))
         return zone_name, borough
 
+    # Map
     m = folium.Map(location=[40.72, -73.98], zoom_start=12, tiles="CartoDB positron")
 
+    # Legend (1–100, 20-min bins)
     legend_html = f"""
     <div style="
-      position: fixed; top: 18px; left: 18px; width: 420px; z-index: 9999;
+      position: fixed; top: 18px; left: 18px; width: 440px; z-index: 9999;
       background: rgba(255,255,255,0.97); padding: 12px;
       border: 2px solid #111; border-radius: 10px;
       font-family: Arial; font-size: 14px; box-shadow: 0 2px 10px rgba(0,0,0,0.25);
@@ -343,8 +385,8 @@ def main() -> int:
       <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
         <div style="height:12px; width:210px; border:1px solid #333;
           background: linear-gradient(90deg, #e60000, #ffd700, #00b050);"></div>
-        <div style="display:flex; justify-content:space-between; width:140px;">
-          <span>1</span><span>5</span><span>10</span>
+        <div style="display:flex; justify-content:space-between; width:160px;">
+          <span>1</span><span>50</span><span>100</span>
         </div>
       </div>
 
@@ -355,14 +397,14 @@ def main() -> int:
 
       <div style="margin-top:8px; color:#444; font-size:12px; line-height:1.35;">
         • Polygons show only TOP {win_good_n} + BOTTOM {win_bad_n} zones per window (fast).<br/>
-        • Window size: {hour_bin} hour(s). Use slider at bottom.<br/>
+        • Window size: {bin_minutes} minutes. Use slider at bottom.<br/>
         • Click marker = highlight zone outline. Click polygon = window stats.
       </div>
     </div>
     """
     m.get_root().html.add_child(folium.Element(legend_html))
 
-    # Outlines for click-highlight
+    # Zone outlines (click-highlight)
     outlines = folium.GeoJson(
         zones_gdf[["LocationID", "geometry"]].to_json(),
         name="Zone outlines",
@@ -381,6 +423,7 @@ def main() -> int:
     def fmt(x, nd=2):
         return "n/a" if x is None else f"{x:.{nd}f}"
 
+    # Static markers (overall)
     for zid in shown_ids:
         if zid not in centroid_by_id.index:
             continue
@@ -392,7 +435,7 @@ def main() -> int:
         tag = "GOOD" if zid in good_set else "BAD"
 
         ov = overall_by_id.get(zid, {})
-        rating_overall = int(ov.get("rating_overall_1_10", 1))
+        rating_overall = int(ov.get("rating_overall_1_100", 1))
         color_overall = str(ov.get("color_overall", "#e60000"))
         trips_sum = int(ov.get("pickups_window_sum", 0))
         pay_mean = safe_float(ov.get("avg_driver_pay_mean"))
@@ -402,7 +445,7 @@ def main() -> int:
         <div style="font-family: Arial; font-size: 13px;">
           <div style="font-weight:900; font-size:14px;">{zone_name}</div>
           <div style="color:#666; margin-bottom:4px;">{borough} — <b>{tag}</b></div>
-          <div><b>Overall rating:</b> <span style="font-weight:900; color:{color_overall};">{rating_overall}/10</span></div>
+          <div><b>Overall rating:</b> <span style="font-weight:900; color:{color_overall};">{rating_overall}/100</span></div>
           <hr style="margin:6px 0;">
           <div><b>Pickups (sum of windows):</b> {trips_sum}</div>
           <div><b>Avg driver pay:</b> ${fmt(pay_mean,2)}</div>
@@ -447,7 +490,7 @@ def main() -> int:
     folium.LayerControl(collapsed=False).add_to(m)
 
     # Time slider polygons
-    week_start = datetime(2025, 1, 6, 0, 0, 0)
+    week_start = datetime(2025, 1, 6, 0, 0, 0)  # Monday
     zones_by_id = zones_gdf.set_index("LocationID")
 
     features = []
@@ -461,12 +504,12 @@ def main() -> int:
             continue
 
         dow_m = int(r["dow_m"])
-        hour = int(r["hour"])
-        ts = week_start + timedelta(days=dow_m, hours=hour)
+        mod = int(r["minute_of_day"])
+        ts = week_start + timedelta(days=dow_m, minutes=mod)
         ts_iso = ts.strftime("%Y-%m-%dT%H:%M:%S")
 
         zone_name, borough = zone_label(zid)
-        rating = int(r.get("rating_1_10", 1))
+        rating = int(r.get("rating_1_100", 1))
         color = str(r.get("color_hex", "#e60000"))
         pickups = int(r.get("pickups", 0))
 
@@ -480,12 +523,16 @@ def main() -> int:
         fare = safe_float(r.get("avg_base_fare"))
         tips = safe_float(r.get("avg_tips"))
 
+        # Build a readable window label (AM/PM)
+        # e.g., "Mon 7:40 PM"
+        window_label = ts.strftime("%a %-I:%M %p") if hasattr(ts, "strftime") else f"{r.get('dow','?')}"
+
         popup_html = f"""
         <div style="font-family: Arial; font-size: 13px;">
           <div style="font-weight:900; font-size:14px;">{zone_name}</div>
           <div style="color:#666; margin-bottom:4px;">{borough} — <b>{tag}</b></div>
-          <div><b>Window:</b> {r.get("dow","?")} {hour:02d}:00 (bin {hour_bin}h)</div>
-          <div><b>Rating (this window):</b> <span style="font-weight:900; color:{color};">{rating}/10</span></div>
+          <div><b>Window:</b> {window_label} (bin {bin_minutes}m)</div>
+          <div><b>Rating (this window):</b> <span style="font-weight:900; color:{color};">{rating}/100</span></div>
           <hr style="margin:6px 0;">
           <div><b>Pickups:</b> {pickups}</div>
           <div><b>Avg trip:</b> {fmt(miles,2)} mi, {fmt(mins,1)} min</div>
@@ -513,7 +560,8 @@ def main() -> int:
 
     geojson = {"type": "FeatureCollection", "features": features}
 
-    period=f"PT{bin_minutes}M"
+    period = f"PT{bin_minutes}M"
+
     TimestampedGeoJson(
         data=geojson,
         transition_time=180,
@@ -523,7 +571,9 @@ def main() -> int:
         loop=False,
         max_speed=3,
         loop_button=True,
-        date_options="ddd HH:00",
+        # Moment.js format for Leaflet.TimeDimension control:
+        # 12-hour time with AM/PM:
+        date_options="ddd h:mm A",
         time_slider_drag_update=True,
         duration=period,
     ).add_to(m)
