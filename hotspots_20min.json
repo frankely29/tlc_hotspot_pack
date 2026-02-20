@@ -1,5 +1,4 @@
-{
-  "meta": {
+meta": {
     "bin_minutes": 20,
     "generated_at": "2026-02-20T00:00:00Z",
     "note": "DEMO DATA ONLY (not real TLC hotspots). Upload a real generated file later to get true earnings hotspots."
@@ -38,78 +37,3 @@
             "weight": 2,
             "dashArray": null,
             "fillColor": "#22b34d",
-            "fillOpacity": 0.55
-          }
-        }
-      }
-    ],
-    "2025-01-06T06:20:00": [
-      {
-        "type": "Feature",
-        "geometry": {
-          "type": "Polygon",
-          "coordinates": [
-            [
-              [-73.995, 40.735],
-              [-73.945, 40.735],
-              [-73.945, 40.795],
-              [-73.995, 40.795],
-              [-73.995, 40.735]
-            ]
-          ]
-        },
-        "properties": {
-          "LocationID": 2,
-          "tag": "GOOD",
-          "pickups": 95,
-          "avg_driver_pay": 16.9,
-          "avg_tips": 2.6,
-          "avg_trip_miles": 3.1,
-          "avg_trip_minutes": 13.2,
-          "rating": 81,
-          "style": {
-            "color": "#00b050",
-            "weight": 2,
-            "dashArray": null,
-            "fillColor": "#6fc24a",
-            "fillOpacity": 0.55
-          }
-        }
-      }
-    ],
-    "2025-01-06T06:40:00": [
-      {
-        "type": "Feature",
-        "geometry": {
-          "type": "Polygon",
-          "coordinates": [
-            [
-              [-74.020, 40.650],
-              [-73.960, 40.650],
-              [-73.960, 40.700],
-              [-74.020, 40.700],
-              [-74.020, 40.650]
-            ]
-          ]
-        },
-        "properties": {
-          "LocationID": 999,
-          "tag": "BAD",
-          "pickups": 8,
-          "avg_driver_pay": 9.1,
-          "avg_tips": 0.4,
-          "avg_trip_miles": 2.0,
-          "avg_trip_minutes": 10.2,
-          "rating": 9,
-          "style": {
-            "color": "#e60000",
-            "weight": 2,
-            "dashArray": "6,6",
-            "fillColor": "#e60000",
-            "fillOpacity": 0.55
-          }
-        }
-      }
-    ]
-  }
-}
