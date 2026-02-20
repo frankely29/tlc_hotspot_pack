@@ -2,121 +2,152 @@
   "meta": {
     "bin_minutes": 20,
     "generated_at": "2026-02-20T00:00:00Z",
-    "note": "DEMO DATA ONLY (this just makes the map render; not real TLC hotspots)."
+    "note": "DEMO DATA ONLY - this only proves the map works. Replace with real generated data later."
   },
-  "markers": {
-    "good": [1, 2, 3],
-    "bad": [998, 999]
-  },
+  "timeline": [
+    "2025-01-06T06:00:00Z",
+    "2025-01-06T06:20:00Z",
+    "2025-01-06T06:40:00Z"
+  ],
   "frames": [
     {
-      "time": "2025-01-06T06:00:00",
-      "features": [
-        {
-          "type": "Feature",
-          "geometry": {
-            "type": "Polygon",
-            "coordinates": [
-              [
-                [-74.03, 40.70],
-                [-73.93, 40.70],
-                [-73.93, 40.78],
-                [-74.03, 40.78],
-                [-74.03, 40.70]
+      "time": "2025-01-06T06:00:00Z",
+      "polygons": {
+        "type": "FeatureCollection",
+        "features": [
+          {
+            "type": "Feature",
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [-74.03, 40.70],
+                  [-73.93, 40.70],
+                  [-73.93, 40.78],
+                  [-74.03, 40.78],
+                  [-74.03, 40.70]
+                ]
               ]
-            ]
-          },
-          "properties": {
-            "LocationID": 1,
-            "tag": "GOOD",
-            "pickups": 120,
-            "avg_driver_pay": 18.5,
-            "avg_tips": 3.2,
-            "avg_trip_miles": 3.6,
-            "avg_trip_minutes": 14.5,
-            "rating": 92,
-            "style": {
-              "color": "#00b050",
-              "weight": 2,
-              "dashArray": null,
-              "fillColor": "#22b34d",
-              "fillOpacity": 0.55
+            },
+            "properties": {
+              "style": {
+                "color": "#00b050",
+                "weight": 2,
+                "dashArray": null,
+                "fillColor": "#22b34d",
+                "fillOpacity": 0.55
+              },
+              "popup": "<b>DEMO ZONE</b><br/>Rating 92/100<br/>Pickups: 120"
             }
           }
+        ]
+      },
+      "markers": [
+        {
+          "tag": "GOOD",
+          "lat": 40.74,
+          "lng": -73.99,
+          "zone": "DEMO GOOD ZONE",
+          "borough": "Manhattan",
+          "rating": 92,
+          "color": "#22b34d",
+          "pickups": 120,
+          "avg_driver_pay": 18.5,
+          "avg_tips": 3.2
         }
       ]
     },
     {
-      "time": "2025-01-06T06:20:00",
-      "features": [
-        {
-          "type": "Feature",
-          "geometry": {
-            "type": "Polygon",
-            "coordinates": [
-              [
-                [-73.995, 40.735],
-                [-73.945, 40.735],
-                [-73.945, 40.795],
-                [-73.995, 40.795],
-                [-73.995, 40.735]
+      "time": "2025-01-06T06:20:00Z",
+      "polygons": {
+        "type": "FeatureCollection",
+        "features": [
+          {
+            "type": "Feature",
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [-73.995, 40.735],
+                  [-73.945, 40.735],
+                  [-73.945, 40.795],
+                  [-73.995, 40.795],
+                  [-73.995, 40.735]
+                ]
               ]
-            ]
-          },
-          "properties": {
-            "LocationID": 2,
-            "tag": "GOOD",
-            "pickups": 95,
-            "avg_driver_pay": 16.9,
-            "avg_tips": 2.6,
-            "avg_trip_miles": 3.1,
-            "avg_trip_minutes": 13.2,
-            "rating": 81,
-            "style": {
-              "color": "#00b050",
-              "weight": 2,
-              "dashArray": null,
-              "fillColor": "#6fc24a",
-              "fillOpacity": 0.55
+            },
+            "properties": {
+              "style": {
+                "color": "#00b050",
+                "weight": 2,
+                "dashArray": null,
+                "fillColor": "#6fc24a",
+                "fillOpacity": 0.55
+              },
+              "popup": "<b>DEMO ZONE</b><br/>Rating 81/100<br/>Pickups: 95"
             }
           }
+        ]
+      },
+      "markers": [
+        {
+          "tag": "GOOD",
+          "lat": 40.77,
+          "lng": -73.97,
+          "zone": "DEMO GOOD ZONE 2",
+          "borough": "Manhattan",
+          "rating": 81,
+          "color": "#6fc24a",
+          "pickups": 95,
+          "avg_driver_pay": 16.9,
+          "avg_tips": 2.6
         }
       ]
     },
     {
-      "time": "2025-01-06T06:40:00",
-      "features": [
-        {
-          "type": "Feature",
-          "geometry": {
-            "type": "Polygon",
-            "coordinates": [
-              [
-                [-74.02, 40.65],
-                [-73.96, 40.65],
-                [-73.96, 40.70],
-                [-74.02, 40.70],
-                [-74.02, 40.65]
+      "time": "2025-01-06T06:40:00Z",
+      "polygons": {
+        "type": "FeatureCollection",
+        "features": [
+          {
+            "type": "Feature",
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [-74.02, 40.65],
+                  [-73.96, 40.65],
+                  [-73.96, 40.70],
+                  [-74.02, 40.70],
+                  [-74.02, 40.65]
+                ]
               ]
-            ]
-          },
-          "properties": {
-            "LocationID": 999,
-            "tag": "BAD",
-            "pickups": 8,
-            "avg_driver_pay": 9.1,
-            "avg_tips": 0.4,
-            "avg_trip_miles": 2.0,
-            "avg_trip_minutes": 10.2,
-            "rating": 9,
-            "style": {
-              "color": "#e60000",
-              "weight": 2,
-              "dashArray": "6,6",
-              "fillColor": "#e60000",
-              "fillOpacity": 0.55
+            },
+            "properties": {
+              "style": {
+                "color": "#e60000",
+                "weight": 2,
+                "dashArray": "6,6",
+                "fillColor": "#e60000",
+                "fillOpacity": 0.55
+              },
+              "popup": "<b>DEMO BAD ZONE</b><br/>Rating 9/100<br/>Pickups: 8"
             }
           }
+        ]
+      },
+      "markers": [
+        {
+          "tag": "BAD",
+          "lat": 40.67,
+          "lng": -73.99,
+          "zone": "DEMO BAD ZONE",
+          "borough": "Brooklyn",
+          "rating": 9,
+          "color": "#e60000",
+          "pickups": 8,
+          "avg_driver_pay": 9.1,
+          "avg_tips": 0.4
         }
       ]
     }
