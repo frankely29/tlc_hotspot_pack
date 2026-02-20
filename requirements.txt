@@ -25,3 +25,4 @@ tqdm==4.67.3
 tzdata==2025.3
 urllib3==2.6.3
 xyzservices==2025.11.0
+python-multipart==0.0.9
