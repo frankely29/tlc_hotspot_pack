@@ -65,7 +65,9 @@ function rebuildAtIndex(idx){
   markerLayer.clearLayers();
 
   // Add polygons
-  polyLayer.addData(bundle.polygons);
+  if (bundle.polygons) {
+    polyLayer.addData(bundle.polygons);
+  }
 
   // Add markers (dynamic)
   for (const m of (bundle.markers || [])){
@@ -94,14 +96,23 @@ function rebuildAtIndex(idx){
 }
 
 async function main(){
-  // You must create this file in your repo root:
-  // hotspots_20min.json
-  const res = await fetch("./hotspots_20min.json", { cache: "no-store" });
-  if (!res.ok) throw new Error("Missing hotspots_20min.json in repo root");
+  // IMPORTANT: Load the JSON from Railway (not GitHub) to avoid 25MB limit
+  const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
+  const DATA_URL = `${RAILWAY_BASE}/hotspots_20min.json?ts=${Date.now()}`;
+
+  const res = await fetch(DATA_URL, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Failed to fetch hotspots JSON (${res.status}). Is Railway /generate done?`);
   const payload = await res.json();
 
-  timeline = payload.timeline || [];
-  dataByTime = new Map(payload.frames?.map(f => [f.time, f]) || []);
+  // Your Railway payload should be: { timeline: [...], frames: [...] }
+  // But if timeline is missing, build it from frames.
+  const frames = Array.isArray(payload.frames) ? payload.frames : [];
+  timeline = Array.isArray(payload.timeline) && payload.timeline.length
+    ? payload.timeline
+    : frames.map(f => f.time).filter(Boolean);
+
+  // Make sure frames are keyed by .time
+  dataByTime = new Map(frames.map(f => [f.time, f]));
 
   const slider = document.getElementById("slider");
   slider.min = 0;
@@ -116,7 +127,7 @@ async function main(){
   if (timeline.length > 0){
     rebuildAtIndex(0);
   } else {
-    document.getElementById("timeLabel").textContent = "No data in hotspots_20min.json";
+    document.getElementById("timeLabel").textContent = "No data in hotspots JSON (frames empty)";
   }
 }
 
