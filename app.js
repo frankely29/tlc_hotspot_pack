@@ -35,6 +35,26 @@ function getNycWeekMinute(dateLike){
   return (dayIndex * 24 * 60) + (hour * 60) + minute;
 }
 
+function getWeekMinuteFromTimelineIso(iso){
+  if (typeof iso !== "string") return null;
+
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::\d{2})?$/);
+  if (!m) return null;
+
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const hour = Number(m[4]);
+  const minute = Number(m[5]);
+
+  // Timeline stamps are NYC wall-clock bins, not absolute instants.
+  // Parse as UTC so weekday/hour/minute stay stable across viewer timezones.
+  const d = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
+  if (!Number.isFinite(d.getTime())) return null;
+
+  return (d.getUTCDay() * 24 * 60) + (d.getUTCHours() * 60) + d.getUTCMinutes();
+}
+
 function getTimelineIndexNearestNow(){
   if (!timeline.length) return 0;
 
@@ -44,9 +64,8 @@ function getTimelineIndexNearestNow(){
   let bestDiff = Number.POSITIVE_INFINITY;
 
   for (let i = 0; i < timeline.length; i += 1){
-    const t = new Date(timeline[i]);
-    if (!Number.isFinite(t.getTime())) continue;
-    const frameNycWeekMinute = getNycWeekMinute(t);
+    const frameNycWeekMinute = getWeekMinuteFromTimelineIso(timeline[i]);
+    if (frameNycWeekMinute === null) continue;
     const diff = Math.abs(frameNycWeekMinute - nowNycWeekMinute);
     const wrappedDiff = Math.min(diff, week - diff);
     if (wrappedDiff < bestDiff){
@@ -72,13 +91,21 @@ function updateCurrentTimeLabel(){
 
 // Force NYC timezone labels
 function formatTimeLabel(iso){
-  const d = new Date(iso);
-  return d.toLocaleString("en-US", {
-    timeZone: "America/New_York",
-    weekday: "short",
-    hour: "numeric",
-    minute: "2-digit"
-  });
+  if (typeof iso !== "string") return "Invalid time";
+
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!m) return "Invalid time";
+
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), 0));
+  if (!Number.isFinite(d.getTime())) return "Invalid time";
+
+  const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getUTCDay()];
+  const hour24 = d.getUTCHours();
+  const minute = String(d.getUTCMinutes()).padStart(2, "0");
+  const ampm = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = hour24 % 12 || 12;
+
+  return `${weekday} ${hour12}:${minute} ${ampm}`;
 }
 
 // Rating color scale (1..100):
