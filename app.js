@@ -122,6 +122,15 @@ function ratingToColorWithBands(rating, bands){
   return { fill: "#e53935", op: 0.68 }; // lowest trip request (avoid)
 }
 
+function bandToColor(band){
+  if (band === "best") return { fill: "#00d66b", op: 0.68 };
+  if (band === "medium") return { fill: "#2563eb", op: 0.68 };
+  if (band === "normal") return { fill: "#38bdf8", op: 0.68 };
+  if (band === "low") return { fill: "#e53935", op: 0.68 };
+  return null;
+}
+
+
 function getFeatureRating(properties){
   const p = properties || {};
 
@@ -148,10 +157,54 @@ function getFeatureRating(properties){
   return null;
 }
 
+function getBundleFeatures(bundle){
+  const polygons = bundle?.polygons;
+
+  // Standard shape: { polygons: { type:"FeatureCollection", features:[...] } }
+  if (Array.isArray(polygons?.features)) return polygons.features;
+
+  // Backward-compatible shape: { polygons:[Feature, ...] }
+  if (Array.isArray(polygons)) return polygons;
+
+  // Fallback if backend changed key name.
+  if (Array.isArray(bundle?.features)) return bundle.features;
+
+  return [];
+}
+
+function applyFrameBands(features){
+  if (!Array.isArray(features) || features.length < 4) return;
+
+  const rated = [];
+  for (const feature of features){
+    const rating = getFeatureRating(feature?.properties || {});
+    if (Number.isFinite(rating)) rated.push({ feature, rating });
+  }
+
+  if (rated.length < 4) return;
+
+  rated.sort((a, b) => a.rating - b.rating);
+  const denom = Math.max(1, rated.length - 1);
+
+  for (let i = 0; i < rated.length; i += 1){
+    const q = i / denom;
+    const p = rated[i].feature.properties || {};
+
+    if (q < 0.25) p.__uiBand = "low";
+    else if (q < 0.50) p.__uiBand = "normal";
+    else if (q < 0.75) p.__uiBand = "medium";
+    else p.__uiBand = "best";
+
+    rated[i].feature.properties = p;
+  }
+}
+
+
 function buildPolygonStyle(feature){
   const p = feature?.properties || {};
-  const rating = getFeatureRating(p);
-  const { fill, op } = ratingToColorWithBands(rating, currentBands);
+
+  const bandColor = bandToColor(p.__uiBand);
+  const { fill, op } = bandColor || ratingToColorWithBands(getFeatureRating(p), currentBands);
 
   return {
     color: "#1b1b1b",
@@ -163,7 +216,7 @@ function buildPolygonStyle(feature){
 }
 
 function computeBandsForBundle(bundle){
-  const features = bundle?.polygons?.features || [];
+  const features = getBundleFeatures(bundle);
   const ratings = [];
 
   for (const feature of features){
@@ -255,6 +308,7 @@ function rebuildAtIndex(idx){
 
   clearMap();
   currentBands = computeBandsForBundle(bundle);
+  applyFrameBands(getBundleFeatures(bundle));
 
   if (bundle.polygons){
     polyLayer.addData(bundle.polygons);
