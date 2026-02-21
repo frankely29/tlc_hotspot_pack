@@ -1,7 +1,7 @@
 // =======================
 // TLC Hotspot Map - app.js (NO ICONS)
 // - Loads data from Railway /hotspots (with /download fallback)
-// - Colors polygons with 2 bands only (Green best, Yellow medium)
+// - Colors polygons with 3 bands (Green good, Blue medium, Red very bad)
 // - Clear error messages if anything fails
 // - Slider throttled for iPhone
 // =======================
@@ -82,16 +82,20 @@ function formatTimeLabel(iso){
 }
 
 // Rating color scale (1..100):
-// Two-color scale: high rating -> green, all other zones -> yellow
+// Green = good, Blue = medium, Red = very bad
 function ratingToColor(rating){
   const r = Number(rating);
-  if (!Number.isFinite(r)) return { fill:"#ffcc00", op:0.5 };
+  if (!Number.isFinite(r)) return { fill:"#3b82f6", op:0.5 };
 
   if (r >= 67){
     return { fill:"#00d66b", op:0.72 };
   }
 
-  return { fill:"#ffcc00", op:0.66 };
+  if (r >= 34){
+    return { fill:"#3b82f6", op:0.68 };
+  }
+
+  return { fill:"#e53935", op:0.66 };
 }
 
 const RAILWAY_BASE_URL = (window.RAILWAY_BASE_URL || "").replace(/\/+$/,"");
@@ -117,7 +121,7 @@ const polyLayer = L.geoJSON(null, {
       ? ratingToColor(rating)
       : ratingToColor(waitMinutes);
 
-    // Enforce app-side two-color scheme (ignore any upstream red style)
+    // Enforce app-side three-color scheme
     const finalFill = fill;
     const finalOp = op;
 
