@@ -30,10 +30,12 @@
     #topPanel {
       top: calc(8px + env(safe-area-inset-top));
       left: 8px;
-      width: min(86vw, 340px);
-      padding: 14px;
+      width: min(82vw, 320px);
+      max-height: min(46vh, 390px);
+      overflow: auto;
+      padding: 10px 12px;
       line-height: 1.3;
-      font-size: 16px;
+      font-size: 15px;
     }
 
     #legendGradient {
@@ -61,13 +63,15 @@
       left: 8px;
       right: 8px;
       bottom: calc(8px + env(safe-area-inset-bottom));
-      padding: 14px;
-      font-size: 18px;
+      padding: 10px 12px;
+      font-size: 15px;
+      max-height: min(28vh, 200px);
+      overflow: auto;
     }
 
-    #timeWindow { font-weight: 900; font-size: 40px; line-height: 1.05; margin-bottom: 6px; }
+    #timeWindow { font-weight: 900; font-size: clamp(32px, 8vw, 40px); line-height: 1; margin-bottom: 4px; }
     #nycNow { font-size: 16px; margin-bottom: 6px; }
-    #modeText { color: #145a2f; font-size: 17px; font-weight: 800; margin-bottom: 8px; }
+    #modeText { color: #145a2f; font-size: 16px; font-weight: 800; margin-bottom: 6px; }
     #slider { width: 100%; accent-color: #1f86ff; }
 
     #btnNow {
@@ -82,7 +86,14 @@
       margin-top: -4px;
     }
 
-    .small { font-size: 14px; }
+    .small { font-size: 13px; }
+
+    #titleText { font-size: clamp(30px, 8vw, 46px); font-weight: 900; line-height: 0.98; }
+
+    @media (min-width: 900px) {
+      #topPanel { width: min(28vw, 380px); max-height: 48vh; }
+      #bottomBar { max-width: 520px; right: auto; }
+    }
   </style>
 </head>
 <body>
@@ -91,7 +102,7 @@
   <button id="btnMin" type="button">Min</button>
 
   <section id="topPanel" class="panel">
-    <div style="font-size:36px;font-weight:900;line-height:1;">NYC HVFHV (1–100)</div>
+    <div id="titleText">NYC HVFHV (1–100)</div>
     <div class="small" style="margin-top:2px;">For-hire vehicle / Uber driver earnings map</div>
 
     <div id="legendGradient" aria-hidden="true"></div>
@@ -115,7 +126,13 @@
 
   <script>
     window.addEventListener("DOMContentLoaded", () => {
-      const BASE = "https://web-production-78f67.up.railway.app".replace(/\/+$/, "");
+      const BASE_CANDIDATES = [
+        new URLSearchParams(window.location.search).get("api"),
+        localStorage.getItem("railwayBase"),
+        "https://web-production-78f67.up.railway.app",
+        ""
+      ].filter((x, i, arr) => x != null && arr.indexOf(x) === i)
+       .map((x) => String(x).replace(/\/+$/, ""));
       const BIN_MINUTES = 20;
       const WEEK_MINUTES = 7 * 24 * 60;
 
@@ -203,10 +220,22 @@
       let liveMode = true;
       let liveInterval = null;
 
+      let activeBase = BASE_CANDIDATES[0] || "";
+
       async function apiJson(path) {
-        const res = await fetch(`${BASE}${path}`, { cache: "no-store" });
-        if (!res.ok) throw new Error(await res.text());
-        return res.json();
+        let lastError = null;
+        for (const base of BASE_CANDIDATES) {
+          try {
+            const res = await fetch(`${base}${path}`, { cache: "no-store" });
+            if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+            activeBase = base;
+            if (base) localStorage.setItem("railwayBase", base);
+            return res.json();
+          } catch (error) {
+            lastError = error;
+          }
+        }
+        throw lastError || new Error("No Railway API base responded.");
       }
 
       function closestTimelineIndexByNYCMinute() {
@@ -255,7 +284,8 @@
         const endTrim = nycShortLabel(end).replace(/^[A-Za-z]{3}\s/, "");
         timeWindow.textContent = `${nycShortLabel(start)} – ${endTrim}`;
         slider.value = String(idx);
-        loadedMsg.textContent = `Loaded ${timeline.length} steps from Railway ✅`;
+        const source = activeBase ? ` ${activeBase}` : "";
+        loadedMsg.textContent = `Loaded ${timeline.length} steps from Railway${source} ✅`;
       }
 
       function setLiveMode(on) {
