@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
   <title>NYC TLC Hotspot Map</title>
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -12,87 +12,101 @@
     html, body { height: 100%; margin: 0; }
     #map { height: 100%; width: 100%; }
 
-    /* Small, phone-friendly panel */
+    /* Compact panel */
     .panel {
       position: fixed;
-      top: 10px; left: 10px;
+      top: 10px;
+      left: 10px;
       z-index: 9999;
-      background: rgba(255,255,255,0.92);
+      background: rgba(255,255,255,0.93);
       border: 2px solid #111;
       border-radius: 10px;
-      font-family: Arial, sans-serif;
-      font-size: 12px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.22);
-      max-width: 270px;
-      overflow: hidden;
-    }
-    .panelHeader {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
       padding: 8px 10px;
-      gap: 8px;
+      font-family: Arial, sans-serif;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+      width: 260px;      /* small */
+      max-width: 70vw;   /* phone safe */
     }
-    .panelTitle {
-      font-weight: 900;
-      font-size: 13px;
-      line-height: 1.1;
+
+    .panel.minimized {
+      width: auto;
+      padding: 6px 8px;
     }
-    .minBtn {
+
+    .titleRow { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    .title { font-weight:900; font-size:13px; line-height:1.1; }
+
+    .btn {
       border: 2px solid #111;
+      background: #fff;
       border-radius: 10px;
       padding: 4px 8px;
-      background: #fff;
-      font-weight: 900;
+      font-weight: 800;
+      cursor: pointer;
       font-size: 12px;
     }
-    .panelBody {
-      padding: 0 10px 10px 10px;
-    }
-    .row { display:flex; align-items:center; gap:8px; margin-top:6px; }
-    .bar {
-      height: 10px; width: 160px;
-      border: 1px solid #333;
-      background: linear-gradient(90deg, #e60000, #ffd700, #00b050);
-      border-radius: 6px;
-    }
-    .chips { display:flex; gap:6px; flex-wrap: wrap; margin-top:8px; }
-    .chip {
-      display:flex; align-items:center; gap:6px;
-      padding: 5px 8px;
-      border: 1px solid rgba(0,0,0,0.25);
-      border-radius: 999px;
-      background: rgba(255,255,255,0.9);
-      font-weight: 700;
-      white-space: nowrap;
-    }
-    .dot {
-      width: 10px; height: 10px; border-radius: 50%;
-      border: 1px solid rgba(0,0,0,0.25);
-    }
-    .small { margin-top:8px; color:#333; line-height:1.25; }
 
-    /* Bottom slider */
+    .row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:6px; }
+    .bar {
+      height: 10px; width: 150px;
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: linear-gradient(90deg, #9b9b9b, #d60000, #ffd700, #00b050);
+    }
+
+    .legendTiny { font-size: 11px; color:#222; line-height:1.2; }
+    .pill {
+      display:inline-flex; align-items:center; gap:6px;
+      border:1px solid rgba(0,0,0,0.25);
+      padding:4px 6px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.8);
+      font-weight: 800;
+      font-size: 11px;
+    }
+    .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+    .dot.gray { background:#9b9b9b; }
+    .dot.red { background:#d60000; }
+    .dot.yellow { background:#ffd700; }
+    .dot.green { background:#00b050; }
+
+    .controls label { font-size: 11px; font-weight: 800; }
+    .controls input[type="number"]{
+      width: 56px; padding:4px 6px; border-radius:8px; border:1px solid rgba(0,0,0,0.35);
+      font-weight: 800;
+    }
+    .controls input[type="checkbox"]{ transform: scale(1.1); }
+
+    .statusLine{
+      margin-top:6px;
+      font-size: 11px;
+      color:#155724;
+      font-weight: 800;
+    }
+    .statusLine.bad { color:#8a1f11; }
+
+    /* Slider */
     .sliderWrap {
       position: fixed;
       left: 10px; right: 10px; bottom: 14px;
       z-index: 9999;
-      background: rgba(255,255,255,0.92);
+      background: rgba(255,255,255,0.93);
       border: 2px solid #111;
       border-radius: 10px;
       padding: 10px 12px;
       font-family: Arial, sans-serif;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.22);
+      box-shadow: 0 2px 10px rgba(0,0,0,0.25);
     }
     input[type="range"] { width: 100%; }
-    .timeLabel { font-weight: 900; font-size: 16px; }
-    .errorLine { margin-top:6px; font-weight:900; color:#b00020; font-size:12px; }
+    .timeLabel { font-weight: 900; font-size: 18px; }
+
+    .hidden { display:none; }
   </style>
 
   <script>
-    // IMPORTANT: set your Railway service base URL here (NO trailing slash)
-    // Example: "https://web-production-78f67.up.railway.app"
-    window.RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
+    // ✅ REQUIRED: set this to YOUR Railway domain (no trailing slash)
+    // Example you already have:
+    window.RAILWAY_BASE_URL = "https://web-production-78f67.up.railway.app";
   </script>
 </head>
 
@@ -100,51 +114,42 @@
   <div id="map"></div>
 
   <div class="panel" id="panel">
-    <div class="panelHeader">
-      <div class="panelTitle">NYC HVFHV (1–100)</div>
-      <button class="minBtn" id="minBtn">Min</button>
+    <div class="titleRow">
+      <div class="title">NYC HVFHV (1–100)</div>
+      <button class="btn" id="minBtn">Min</button>
     </div>
 
-    <div class="panelBody" id="panelBody">
+    <div id="panelBody">
       <div class="row">
         <div class="bar"></div>
-        <div style="display:flex; gap:6px; font-weight:900;">
-          <span>Low</span><span>Mid</span><span>High</span>
-        </div>
+        <div class="legendTiny"><b>Low</b> → <b>High</b></div>
       </div>
 
-      <div class="chips">
-        <div class="chip"><span style="color:#00b050; font-weight:900;">✅</span> Top (Best)</div>
-        <div class="chip"><span style="color:#e60000; font-weight:900;">❌</span> Bottom (Worst)</div>
+      <div class="row">
+        <span class="pill"><span class="dot gray"></span>Gray = Very Low</span>
+        <span class="pill"><span class="dot red"></span>Red = Avoid</span>
+        <span class="pill"><span class="dot yellow"></span>Yellow = Medium</span>
+        <span class="pill"><span class="dot green"></span>Green = Good</span>
       </div>
 
-      <div class="small">
-        • Polygons = rating (red → yellow → green)<br>
-        • Icons show ONLY extremes for this time window<br>
-        • Use the 20-minute slider below
+      <div class="legendTiny" style="margin-top:6px;">
+        Polygons show <b>rating</b> (Gray→Red→Yellow→Green).<br>
+        Icons show only <b>extremes</b> (✅ top / ❌ bottom) so signals don’t conflict.
       </div>
 
-      <div class="row" style="margin-top:10px;">
-        <label style="display:flex; align-items:center; gap:6px; font-weight:900;">
-          <input id="toggleIcons" type="checkbox" checked />
-          Icons
-        </label>
-        <span style="font-weight:900;">Top</span>
-        <input id="topN" type="number" value="25" min="0" max="200" style="width:58px; padding:4px; border-radius:8px; border:1px solid #888;" />
-        <span style="font-weight:900;">Bottom</span>
-        <input id="botN" type="number" value="25" min="0" max="200" style="width:58px; padding:4px; border-radius:8px; border:1px solid #888;" />
+      <div class="row controls" style="margin-top:8px;">
+        <label><input type="checkbox" id="iconsToggle" checked> Icons</label>
+        <label>Top <input type="number" id="topN" min="0" max="200" value="25"></label>
+        <label>Bot <input type="number" id="botN" min="0" max="200" value="25"></label>
       </div>
 
-      <div class="small" id="statusLine" style="margin-top:8px; font-weight:900;">
-        Loading…
-      </div>
+      <div class="statusLine" id="statusLine">Loading…</div>
     </div>
   </div>
 
   <div class="sliderWrap">
     <div class="timeLabel" id="timeLabel">Loading…</div>
     <input id="slider" type="range" min="0" max="0" step="1" value="0" />
-    <div class="errorLine" id="errorLine" style="display:none;"></div>
   </div>
 
   <script src="./app.js"></script>
