@@ -133,29 +133,6 @@ function getFeatureRating(properties){
   return null;
 }
 
-function getFeatureEstimatedWaitMinutes(properties){
-  const p = properties || {};
-  const directWait = p.wait_minutes ?? p.wait_time_minutes ?? p.wait_time ?? p.wait ?? p.estimated_wait_minutes ?? p.estimated_wait_min;
-  if (directWait !== null && directWait !== undefined && Number.isFinite(Number(directWait))){
-    return Math.max(0, Number(directWait));
-  }
-
-  const pickups = Number(p.pickups);
-  const binMinutes = Number(payloadMeta?.bin_minutes ?? 20);
-  if (Number.isFinite(pickups) && pickups > 0 && Number.isFinite(binMinutes) && binMinutes > 0){
-    return binMinutes / pickups;
-  }
-
-  return null;
-}
-
-function formatEstimatedWait(waitMins){
-  if (!Number.isFinite(waitMins)) return "n/a";
-  if (waitMins < 1) return "< 1 min";
-  if (waitMins < 10) return `${waitMins.toFixed(1)} min`;
-  return `${Math.round(waitMins)} min`;
-}
-
 function buildPolygonStyle(feature){
   const p = feature?.properties || {};
   const backendFill = p?.style?.fillColor;
@@ -208,15 +185,6 @@ const polyLayer = L.geoJSON(null, {
       );
     }
 
-    const estWait = getFeatureEstimatedWaitMinutes(p);
-    layer.bindTooltip(
-      `<div style="font-weight:800;">${p.zone || "Zone"}</div><div>Est. wait: <b>${formatEstimatedWait(estWait)}</b></div>`,
-      {
-        permanent: true,
-        direction: "center",
-        className: "zone-wait-tooltip"
-      }
-    );
   }
 }).addTo(map);
 
