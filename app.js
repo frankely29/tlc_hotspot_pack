@@ -26,6 +26,35 @@ function nycTimeLabel(iso){
   });
 }
 
+function getNYCParts(date = new Date()){
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+
+  const parts = Object.fromEntries(
+    fmt
+      .formatToParts(date)
+      .filter((p) => p.type !== "literal")
+      .map((p) => [p.type, p.value])
+  );
+
+  const dowMap = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 };
+  return {
+    dow: dowMap[parts.weekday] ?? 0,
+    minuteOfDay: (Number(parts.hour) || 0) * 60 + (Number(parts.minute) || 0)
+  };
+}
+
+function timelineMinuteOfWeek(iso){
+  const d = new Date(iso);
+  const dow = (d.getUTCDay() + 6) % 7; // Mon=0..Sun=6
+  return dow * 1440 + d.getUTCHours() * 60 + d.getUTCMinutes();
+}
+
 function addMinutesISO(iso, minutes){
   const d = new Date(iso);
   return new Date(d.getTime() + minutes * 60 * 1000).toISOString();
@@ -147,17 +176,21 @@ function setSliderBounds(){
   slider.step = 1;
 }
 
-// Pick index closest to NOW (uses real time, labels in NYC)
+// Pick index closest to CURRENT NYC day/time, regardless of anchor date.
 function pickIndexClosestToNow(){
   if (!timeline.length) return 0;
 
-  const nowMs = Date.now(); // current moment
+  const nycNow = getNYCParts();
+  const nowMinuteOfWeek = nycNow.dow * 1440 + nycNow.minuteOfDay;
   let bestIdx = 0;
   let bestDiff = Infinity;
+  const weekMinutes = 7 * 24 * 60;
 
   for (let i=0; i<timeline.length; i++){
-    const tMs = new Date(timeline[i]).getTime();
-    const diff = Math.abs(tMs - nowMs);
+    const tMinuteOfWeek = timelineMinuteOfWeek(timeline[i]);
+    const directDiff = Math.abs(tMinuteOfWeek - nowMinuteOfWeek);
+    const wrapDiff = weekMinutes - directDiff;
+    const diff = Math.min(directDiff, wrapDiff);
     if (diff < bestDiff){
       bestDiff = diff;
       bestIdx = i;
@@ -179,8 +212,8 @@ async function loadTimeline(){
 }
 
 async function loadFrame(i){
-  // expects Railway to expose /frame?i=
-  const res = await apiGET(`/frame?i=${encodeURIComponent(i)}`);
+  // Railway exposes /frame/{idx}
+  const res = await apiGET(`/frame/${encodeURIComponent(i)}`);
   if (!res.ok){
     const txt = await res.text().catch(()=> "");
     throw new Error(`Failed /frame (${res.status}). ${txt}`);
