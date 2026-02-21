@@ -1,215 +1,164 @@
-// TLC Hotspot Map (GitHub Pages frontend)
-// DATA SOURCE: Railway only (volume-backed output served by Railway)
-//
-// Required Railway endpoints:
-// - POST  /generate?bin_minutes=20  (creates output on Railway volume)
-// - GET   /hotspots_20min.json      (serves output JSON)
-// - GET   /status                  (optional, for debugging)
+const RAILWAY = (window.RAILWAY_BASE_URL || "").replace(/\/+$/, "");
+if (!RAILWAY) throw new Error("Missing window.RAILWAY_BASE_URL in index.html");
 
-const BASE = (window.RAILWAY_BASE_URL || "").replace(/\/+$/, "");
-if (!BASE) {
-  setStatus("ERROR: Missing window.RAILWAY_BASE_URL in index.html");
-  throw new Error("Missing RAILWAY_BASE_URL");
-}
-
-function setStatus(msg) {
-  const el = document.getElementById("statusText");
-  if (el) el.textContent = msg;
-}
-
-function formatTimeNYC(iso) {
+function formatNYCTime(iso) {
   const d = new Date(iso);
   return d.toLocaleString("en-US", {
     timeZone: "America/New_York",
     weekday: "short",
     hour: "numeric",
-    minute: "2-digit"
+    minute: "2-digit",
   });
 }
 
-// Your mandatory color rules:
-// Green = Best, Blue = Medium, Sky = Normal, Red = Avoid
-//
-// We map rating 1..100 into 4 buckets.
-// You can adjust thresholds later if you want.
-function ratingToBucket(rating) {
-  const r = Number(rating);
-  if (!Number.isFinite(r)) return { name: "Normal", color: "#7dd3fc" };
+function setErr(msg) {
+  const el = document.getElementById("err");
+  el.style.display = "block";
+  el.textContent = msg;
+}
 
-  // Avoid: bottom
-  if (r <= 25) return { name: "Avoid", color: "#ef4444" };
-  // Normal
-  if (r <= 50) return { name: "Normal", color: "#7dd3fc" };
-  // Medium
-  if (r <= 75) return { name: "Medium", color: "#1f6feb" };
-  // Best
-  return { name: "Best", color: "#1db954" };
+function clearErr() {
+  const el = document.getElementById("err");
+  el.style.display = "none";
+  el.textContent = "";
+}
+
+function setTopStatus(ok, msg) {
+  const el = document.getElementById("topStatus");
+  el.classList.toggle("bad", !ok);
+  el.textContent = msg;
 }
 
 const map = L.map("map", { zoomControl: true }).setView([40.72, -73.98], 12);
-
 L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-  attribution: '&copy; OpenStreetMap &copy; CARTO'
+  attribution: "&copy; OpenStreetMap &copy; CARTO"
 }).addTo(map);
 
-// Layer for zones
-const zoneLayer = L.geoJSON(null, {
-  // IMPORTANT: no outlines (you asked to remove perimeter outlines)
-  style: (feature) => {
-    const p = feature?.properties || {};
-    // Our code uses properties.rating when present; fallback to properties.score/val.
-    const rating = (p.rating ?? p.score ?? p.value ?? p.r ?? null);
-    const bucket = ratingToBucket(rating);
+map.createPane("polys");
+map.getPane("polys").style.zIndex = 400;
 
-    return {
-      color: bucket.color,
-      weight: 0,           // no outline
-      fillColor: bucket.color,
-      fillOpacity: 0.45
-    };
-  },
+const polyLayer = L.geoJSON(null, {
+  pane: "polys",
+  style: (f) => (f && f.properties && f.properties.style) ? f.properties.style : { color:"#999", weight:1, fillOpacity:0.2 },
   onEachFeature: (feature, layer) => {
-    const p = feature?.properties || {};
-    const rating = (p.rating ?? p.score ?? p.value ?? p.r ?? null);
-    const bucket = ratingToBucket(rating);
-
-    const zoneName = p.zone || p.name || p.LocationID || "Zone";
-    const borough = p.borough || p.Borough || "";
-
-    const popup = `
-      <div style="font-family:Arial; font-size:13px;">
-        <div style="font-weight:900; font-size:14px;">${zoneName}</div>
-        ${borough ? `<div style="color:#666;">${borough}</div>` : ``}
-        <hr style="margin:6px 0;">
-        <div><b>Rating:</b> ${rating ?? "n/a"} / 100</div>
-        <div><b>Bucket:</b> ${bucket.name}</div>
-      </div>
-    `;
-    layer.bindPopup(popup, { maxWidth: 320 });
+    const p = feature.properties || {};
+    if (p.popup) layer.bindPopup(p.popup, { maxWidth: 320 });
   }
 }).addTo(map);
 
 let timeline = [];
 let framesByTime = new Map();
 
-function rebuildAtIndex(idx) {
-  const key = timeline[idx];
-  const frame = framesByTime.get(key);
-  if (!frame) return;
+function closestIndexToNow() {
+  if (!timeline.length) return 0;
+  const nowMs = Date.now();
 
-  document.getElementById("timeLabel").textContent = formatTimeNYC(key);
-
-  zoneLayer.clearLayers();
-
-  // Expected payload format:
-  // payload = { timeline: [...], frames: [{ time, polygons: GeoJSON }, ...] }
-  //
-  // We support both:
-  // - frame.polygons
-  // - frame.zones
-  // - frame.geojson
-  const geo = frame.polygons || frame.zones || frame.geojson || null;
-
-  if (geo) {
-    zoneLayer.addData(geo);
+  let bestIdx = 0;
+  let bestDiff = Infinity;
+  for (let i = 0; i < timeline.length; i++) {
+    const tMs = new Date(timeline[i]).getTime();
+    const diff = Math.abs(tMs - nowMs);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      bestIdx = i;
+    }
   }
+  return bestIdx;
+}
+
+function renderAtIndex(idx) {
+  const key = timeline[idx];
+  const bundle = framesByTime.get(key);
+  if (!bundle) return;
+
+  document.getElementById("timeLabel").textContent = formatNYCTime(key);
+
+  polyLayer.clearLayers();
+  if (bundle.polygons) polyLayer.addData(bundle.polygons);
 }
 
 async function fetchHotspots() {
-  const url = `${BASE}/hotspots_20min.json?ts=${Date.now()}`; // cache-bust
-  const res = await fetch(url, { cache: "no-store" });
+  clearErr();
+  setTopStatus(false, "Loading from Railway…");
 
+  const res = await fetch(`${RAILWAY}/hotspots_20min.json`, { cache: "no-store" });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
-    throw new Error(`Load failed (${res.status}). ${txt}`.trim());
+    throw new Error(`Failed to fetch hotspots (${res.status}). ${txt}`);
   }
-
-  return await res.json();
-}
-
-async function load() {
-  setStatus("Loading…");
-
-  const payload = await fetchHotspots();
+  const payload = await res.json();
 
   timeline = payload.timeline || [];
-  const frames = payload.frames || [];
+  framesByTime = new Map((payload.frames || []).map(f => [f.time, f]));
 
-  framesByTime = new Map(frames.map(f => [f.time, f]));
+  if (!timeline.length) throw new Error("No timeline in hotspots_20min.json");
 
   const slider = document.getElementById("slider");
   slider.min = 0;
   slider.max = Math.max(0, timeline.length - 1);
   slider.step = 1;
 
-  // Start slider near "now" in NYC time
-  // We choose the closest frame time to current NYC time.
-  let startIdx = 0;
-  if (timeline.length > 0) {
-    const now = Date.now();
-    let best = { i: 0, diff: Infinity };
-    for (let i = 0; i < timeline.length; i++) {
-      const t = new Date(timeline[i]).getTime();
-      const diff = Math.abs(t - now);
-      if (diff < best.diff) best = { i, diff };
-    }
-    startIdx = best.i;
-  }
-
+  const startIdx = closestIndexToNow();
   slider.value = String(startIdx);
+  renderAtIndex(startIdx);
 
-  // Smooth slider updates (mobile friendly)
   let pending = null;
   slider.addEventListener("input", () => {
     pending = Number(slider.value);
     if (slider._raf) return;
     slider._raf = requestAnimationFrame(() => {
       slider._raf = null;
-      if (pending !== null) rebuildAtIndex(pending);
+      if (pending !== null) renderAtIndex(pending);
     });
   });
 
-  if (timeline.length === 0) {
-    setStatus("No timeline in hotspots_20min.json. Run Generate.");
-    document.getElementById("timeLabel").textContent = "No data";
-    return;
-  }
-
-  rebuildAtIndex(startIdx);
-  setStatus(`Loaded ${timeline.length} steps ✓`);
+  setTopStatus(true, `Loaded ${timeline.length} steps ✓`);
 }
 
-async function generateOnRailway() {
-  // Uses your existing endpoint
-  const url = `${BASE}/generate?bin_minutes=20`;
-  setStatus("Generating on Railway…");
+async function callGenerate() {
+  clearErr();
+  setTopStatus(false, "Generating on Railway…");
 
-  const res = await fetch(url, {
+  const qs = new URLSearchParams({
+    bin_minutes: "20",
+    min_trips_per_window: "10",
+    normal_lo: "40",
+    medium_lo: "60",
+    best_lo: "80"
+  });
+
+  const res = await fetch(`${RAILWAY}/generate?${qs.toString()}`, {
     method: "POST",
     headers: { "accept": "application/json" }
   });
 
-  const json = await res.json().catch(() => ({}));
-
   if (!res.ok) {
-    throw new Error(json?.error || `Generate failed (${res.status})`);
+    const txt = await res.text().catch(() => "");
+    throw new Error(`Generate failed (${res.status}). ${txt}`);
   }
-  return json;
+
+  await res.json();
+  await fetchHotspots();
 }
 
-// Buttons
-document.getElementById("btnReload").addEventListener("click", async () => {
-  try { await load(); } catch (e) { setStatus(String(e.message || e)); }
+document.getElementById("btnReload").addEventListener("click", () => {
+  fetchHotspots().catch(err => {
+    console.error(err);
+    setErr(String(err.message || err));
+    setTopStatus(false, "Load failed ✗");
+  });
 });
 
-document.getElementById("btnGenerate").addEventListener("click", async () => {
-  try {
-    await generateOnRailway();
-    await load();
-  } catch (e) {
-    setStatus(String(e.message || e));
-  }
+document.getElementById("btnGenerate").addEventListener("click", () => {
+  callGenerate().catch(err => {
+    console.error(err);
+    setErr(String(err.message || err));
+    setTopStatus(false, "Generate failed ✗");
+  });
 });
 
-// Boot
-load().catch(e => setStatus(String(e.message || e)));
+fetchHotspots().catch(err => {
+  console.error(err);
+  setErr(String(err.message || err));
+  setTopStatus(false, "Load failed ✗");
+});
