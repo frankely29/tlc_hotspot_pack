@@ -12,8 +12,7 @@
     html, body { height: 100%; margin: 0; }
     #map { height: 100%; width: 100%; }
 
-    /* Small, non-blocking legend (top-left) */
-    .panel {
+    .panel{
       position: fixed; top: 10px; left: 10px; z-index: 9999;
       background: rgba(255,255,255,0.92);
       padding: 8px 10px;
@@ -22,13 +21,12 @@
       max-width: 260px;
       box-shadow: 0 2px 10px rgba(0,0,0,0.25);
     }
-    .panelTitle { font-weight: 900; font-size: 13px; margin-bottom: 6px; }
-    .legendRow { display:flex; align-items:center; gap:8px; margin: 4px 0; }
-    .dot { width: 10px; height: 10px; border-radius: 50%; display:inline-block; border: 1px solid rgba(0,0,0,0.25); }
-    .small { font-size: 11px; color: #333; line-height: 1.25; margin-top: 6px; }
+    .panelTitle{ font-weight:900; font-size:13px; margin-bottom:6px; }
+    .legendRow{ display:flex; align-items:center; gap:8px; margin:4px 0; }
+    .dot{ width:10px; height:10px; border-radius:50%; display:inline-block; border:1px solid rgba(0,0,0,0.25); }
+    .small{ font-size:11px; color:#333; line-height:1.25; margin-top:6px; }
 
-    /* Slider bar bottom */
-    .sliderWrap {
+    .sliderWrap{
       position: fixed; left: 10px; right: 10px; bottom: 12px; z-index: 9999;
       background: rgba(255,255,255,0.92);
       border: 2px solid #111; border-radius: 10px;
@@ -36,14 +34,14 @@
       font-family: Arial, sans-serif;
       box-shadow: 0 2px 10px rgba(0,0,0,0.25);
     }
-    input[type="range"] { width: 100%; }
-    .timeLabel { font-weight: 900; }
-    .subLabel { font-size: 11px; color: #444; margin-top: 2px; }
-    .errorLine { margin-top: 6px; font-size: 11px; color: #b00000; font-weight: 700; white-space: pre-wrap; }
+    input[type="range"]{ width:100%; }
+    .timeLabel{ font-weight:900; }
+    .subLabel{ font-size:11px; color:#444; margin-top:2px; }
+    .errorLine{ margin-top:6px; font-size:11px; color:#b00000; font-weight:700; white-space:pre-wrap; }
   </style>
 
   <script>
-    // IMPORTANT: Your GitHub Pages map reads data from Railway ONLY.
+    // ✅ PUT YOUR RAILWAY DOMAIN HERE
     window.RAILWAY_BASE_URL = "https://web-production-78f67.up.railway.app";
   </script>
 </head>
@@ -53,7 +51,6 @@
 
   <div class="panel">
     <div class="panelTitle">NYC HVFHV Zones (1–100)</div>
-
     <div class="legendRow"><span class="dot" style="background:#18a84a;"></span><b>Green</b> = Best</div>
     <div class="legendRow"><span class="dot" style="background:#1f57ff;"></span><b>Blue</b> = Medium</div>
     <div class="legendRow"><span class="dot" style="background:#64c8ff;"></span><b>Sky</b> = Normal</div>
