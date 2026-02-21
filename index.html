@@ -13,15 +13,32 @@
     #map { height: 100vh; width: 100vw; }
     #ui {
       position: absolute; top: 10px; left: 10px; z-index: 1000;
-      background: white; padding: 14px; border-radius: 12px;
-      box-shadow: 0 3px 20px rgba(0,0,0,0.3); max-width: 350px;
+      background: rgba(255,255,255,0.94);
+      padding: 10px 12px;
+      border-radius: 10px;
+      box-shadow: 0 3px 15px rgba(0,0,0,0.25);
+      max-width: 260px;
       border: 2px solid #111;
+      font-size: 13.5px;
     }
-    button { padding: 10px 16px; font-size: 15px; font-weight: bold; border: none; border-radius: 8px; margin: 6px 4px 6px 0; width: 48%; }
+    button { 
+      padding: 9px 12px; 
+      font-size: 14px; 
+      font-weight: bold; 
+      border: none; 
+      border-radius: 7px; 
+      margin: 6px 3px 6px 0; 
+      width: 48%; 
+    }
     #btnNow, #btnGenerate { background: #1976d2; color: white; }
-    #timeLabel { font-weight: 900; font-size: 18px; margin: 10px 0 4px; }
-    #status { font-size: 13px; color: #333; line-height: 1.4; }
-    .legendBar { height: 14px; border-radius: 7px; margin: 10px 0; background: linear-gradient(to right, #2e7d32, #1976d2, #81d4fa, #d32f2f); }
+    #timeLabel { font-weight: 900; font-size: 16.5px; margin: 8px 0 3px; }
+    #status { font-size: 12.5px; color: #333; line-height: 1.35; }
+    .legendBar { 
+      height: 10px; 
+      border-radius: 5px; 
+      margin: 8px 0; 
+      background: linear-gradient(to right, #2e7d32, #1976d2, #81d4fa, #d32f2f); 
+    }
   </style>
 </head>
 <body>
@@ -43,22 +60,20 @@
     <button id="btnGenerate">Generate / Refresh</button>
 
     <div id="timeLabel">Loading NYC time…</div>
-    <div id="status">Checking Railway data…</div>
+    <div id="status">Checking Railway volume…</div>
     <input type="range" id="slider" min="0" max="0" value="0" step="1"/>
   </div>
 
   <script>
-    // Your Railway URL (from your repo)
     const BASE = "https://web-production-78f67.up.railway.app".replace(/\/+$/, "");
     const BIN_MINUTES = 20;
 
-    // STRICT color buckets – no overrides allowed
     function ratingToColor(r) {
       r = Math.max(1, Math.min(100, Number(r) || 1));
-      if (r <= 25) return "#d32f2f";   // Red = Avoid
-      if (r <= 50) return "#81d4fa";   // Sky = Normal
-      if (r <= 75) return "#1976d2";   // Blue = Medium
-      return "#2e7d32";                // Green = Best
+      if (r <= 25) return "#d32f2f";
+      if (r <= 50) return "#81d4fa";
+      if (r <= 75) return "#1976d2";
+      return "#2e7d32";
     }
 
     const map = L.map("map").setView([40.72, -73.98], 12);
@@ -70,9 +85,9 @@
       style: f => ({
         stroke: true,
         color: "#111",
-        weight: 1.5,
+        weight: 2.2,
         fillColor: ratingToColor(f.properties?.rating || 50),
-        fillOpacity: 0.78
+        fillOpacity: 0.82
       })
     }).addTo(map);
 
@@ -140,7 +155,6 @@
         slider.value = startIdx;
         await loadFrame(startIdx);
 
-        // Live auto-update to current NYC time every 60 seconds
         setInterval(() => {
           if (document.visibilityState === "visible") {
             const idx = pickClosestIndex();
@@ -150,7 +164,7 @@
         }, 60000);
 
       } catch (e) {
-        setStatus("No processed data yet.<br>Click <strong>Generate / Refresh</strong> to build map from your PARQUET files in Railway volume.");
+        setStatus("No processed data yet.<br>Click <strong>Generate / Refresh</strong> once to build from your PARQUET files in Railway volume.");
       }
     }
 
@@ -163,11 +177,10 @@
     };
 
     document.getElementById("btnGenerate").onclick = async () => {
-      setStatus("Processing data on Railway… (1–2 min)");
+      setStatus("Processing on Railway… (1–2 min)<br>After it finishes the map will auto-load.");
       try {
         await fetch(`${BASE}/generate?bin_minutes=20&good_n=200&bad_n=120&win_good_n=80&win_bad_n=40&min_trips_per_window=10&simplify_meters=25`, {method:"POST"});
-        setStatus("Generation started. Waiting for Railway…");
-        setTimeout(boot, 90000); // retry load after processing
+        setTimeout(boot, 90000);
       } catch (e) {
         setStatus("Generate failed – check Railway logs");
       }
