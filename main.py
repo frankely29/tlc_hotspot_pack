@@ -2,33 +2,34 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
+import os
 import traceback
 
 from build_hotspots import build_hotspots_json
 
 app = FastAPI()
 
+# Persist everything on Railway Volume
+DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
+OUT_PATH = DATA_DIR / "hotspots_20min.json"
+
 # Allow GitHub Pages to call Railway
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # ok for your use case
+    allow_origins=["*"],   # ok for your public map
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# IMPORTANT: Use Railway volume mount (/data)
-DATA_DIR = Path("/data")
-OUT_PATH = DATA_DIR / "hotspots_20min.json"
-
 @app.get("/")
 def root():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    parqs = sorted([p.name for p in DATA_DIR.glob("*.parquet")])
+    parquets = sorted([p.name for p in DATA_DIR.glob("*.parquet")])
     return {
         "status": "ok",
         "data_dir": str(DATA_DIR),
-        "parquets": parqs,
+        "parquets": parquets,
         "has_output": OUT_PATH.exists(),
         "output_mb": round(OUT_PATH.stat().st_size / 1024 / 1024, 2) if OUT_PATH.exists() else 0,
     }
@@ -37,9 +38,18 @@ def root():
 async def upload(file: UploadFile = File(...)):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     out_path = DATA_DIR / file.filename
-    content = await file.read()
-    out_path.write_bytes(content)
-    return {"saved": str(out_path), "size_mb": round(len(content) / 1024 / 1024, 2)}
+
+    # stream-read to avoid memory spikes on big parquet
+    size = 0
+    with out_path.open("wb") as f:
+        while True:
+            chunk = await file.read(1024 * 1024)  # 1MB
+            if not chunk:
+                break
+            size += len(chunk)
+            f.write(chunk)
+
+    return {"saved": str(out_path), "size_mb": round(size / 1024 / 1024, 2)}
 
 @app.post("/generate")
 def generate(
@@ -53,9 +63,12 @@ def generate(
 ):
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-        parquets = sorted(DATA_DIR.glob("*.parquet"))
+        parquets = list(DATA_DIR.glob("*.parquet"))
         if not parquets:
-            return JSONResponse({"error": "No .parquet files found in /data. Upload first via /upload."}, status_code=400)
+            return JSONResponse(
+                {"error": "No .parquet files found in /data. Upload first via /upload."},
+                status_code=400,
+            )
 
         build_hotspots_json(
             parquet_files=parquets,
@@ -71,9 +84,10 @@ def generate(
 
         return {
             "ok": True,
-            "output": str(OUT_PATH),
+            "output": str(OUT_PATH.name),
             "size_mb": round(OUT_PATH.stat().st_size / 1024 / 1024, 2),
         }
+
     except Exception as e:
         return JSONResponse(
             {"error": str(e), "trace": traceback.format_exc()},
@@ -82,10 +96,22 @@ def generate(
 
 @app.get("/hotspots")
 def hotspots():
-    """
-    This is what GitHub Pages will fetch.
-    Returns the generated JSON from the Railway volume.
-    """
+    # This is what GitHub Pages will fetch
     if not OUT_PATH.exists():
-        return JSONResponse({"error": "hotspots_20min.json not generated yet. Call /generate first."}, status_code=404)
-    return FileResponse(str(OUT_PATH), media_type="application/json", filename="hotspots_20min.json")
+        return JSONResponse(
+            {"error": "hotspots_20min.json not generated yet. Call POST /generate first."},
+            status_code=404,
+        )
+
+    # Prevent old cached file causing “wrong colors” after you regenerate
+    headers = {
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+    return FileResponse(
+        str(OUT_PATH),
+        media_type="application/json",
+        filename="hotspots_20min.json",
+        headers=headers,
+    )
