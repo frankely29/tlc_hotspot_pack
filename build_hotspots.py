@@ -3,16 +3,67 @@ from __future__ import annotations
 import json
 import zipfile
 from pathlib import Path
+from typing import List, Tuple
 from datetime import datetime, timedelta
-from typing import Iterable
 
 import duckdb
 import pandas as pd
 import geopandas as gpd
 import requests
 
+
 TAXI_ZONES_ZIP_URL = "https://d37ci6vzurychx.cloudfront.net/misc/taxi_zones.zip"
 TAXI_ZONE_LOOKUP_URL = "https://d37ci6vzurychx.cloudfront.net/misc/taxi_zone_lookup.csv"
+
+
+def ensure_dir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
+
+
+def download_to(url: str, out_path: Path) -> None:
+    ensure_dir(out_path.parent)
+    if out_path.exists() and out_path.stat().st_size > 0:
+        return
+    r = requests.get(url, timeout=60)
+    r.raise_for_status()
+    out_path.write_bytes(r.content)
+
+
+def fetch_taxi_zones(meta_dir: Path) -> Tuple[gpd.GeoDataFrame, pd.DataFrame]:
+    zip_path = meta_dir / "taxi_zones.zip"
+    lookup_path = meta_dir / "taxi_zone_lookup.csv"
+
+    download_to(TAXI_ZONES_ZIP_URL, zip_path)
+    download_to(TAXI_ZONE_LOOKUP_URL, lookup_path)
+
+    lookup_df = pd.read_csv(lookup_path)
+    if "LocationID" not in lookup_df.columns:
+        raise ValueError("taxi_zone_lookup.csv missing LocationID")
+
+    extract_dir = meta_dir / "taxi_zones_extracted"
+    if not extract_dir.exists():
+        ensure_dir(extract_dir)
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(extract_dir)
+
+    shp_files = list(extract_dir.rglob("*.shp"))
+    if not shp_files:
+        raise ValueError("Could not find .shp in taxi_zones_extracted")
+
+    zones_gdf = gpd.read_file(shp_files[0])
+
+    if "LocationID" not in zones_gdf.columns:
+        cols_lower = {c.lower(): c for c in zones_gdf.columns}
+        if "locationid" in cols_lower:
+            zones_gdf = zones_gdf.rename(columns={cols_lower["locationid"]: "LocationID"})
+        else:
+            raise ValueError(f"Taxi zones shapefile missing LocationID. Columns: {list(zones_gdf.columns)}")
+
+    if zones_gdf.crs is None:
+        zones_gdf = zones_gdf.set_crs("EPSG:4326", allow_override=True)
+
+    zones_gdf = zones_gdf.to_crs(epsg=4326)
+    return zones_gdf, lookup_df
 
 
 def lerp(a: float, b: float, t: float) -> float:
@@ -21,6 +72,7 @@ def lerp(a: float, b: float, t: float) -> float:
 
 def score_to_color_hex(score01: float) -> str:
     s = max(0.0, min(1.0, float(score01)))
+    # red -> yellow -> green
     if s <= 0.5:
         t = s / 0.5
         r = int(lerp(230, 255, t))
@@ -39,63 +91,103 @@ def score_to_rating_1_100(score01: float) -> int:
     return int(round(1 + 99 * s))
 
 
-def minmax(series: pd.Series) -> pd.Series:
-    s = pd.to_numeric(series, errors="coerce")
-    mn = s.min(skipna=True)
-    mx = s.max(skipna=True)
-    if pd.isna(mn) or pd.isna(mx) or mx == mn:
-        return pd.Series([0.0] * len(s), index=s.index)
-    return (s - mn) / (mx - mn)
+def build_metrics(parquet_files: List[Path], bin_minutes: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    con = duckdb.connect(database=":memory:")
+    parquet_list = [str(p) for p in parquet_files]
+    parquet_sql = ", ".join("'" + p.replace("'", "''") + "'" for p in parquet_list)
+
+    sql_total = f"""
+    WITH base AS (
+      SELECT
+        CAST(PULocationID AS INTEGER) AS PULocationID,
+        pickup_datetime
+      FROM read_parquet([{parquet_sql}])
+      WHERE PULocationID IS NOT NULL AND pickup_datetime IS NOT NULL
+    )
+    SELECT
+      PULocationID,
+      COUNT(*) AS pickups_total
+    FROM base
+    GROUP BY 1;
+    """
+
+    sql_win = f"""
+    WITH base AS (
+      SELECT
+        CAST(PULocationID AS INTEGER) AS PULocationID,
+        pickup_datetime,
+        TRY_CAST(driver_pay AS DOUBLE) AS driver_pay,
+        TRY_CAST(tips AS DOUBLE) AS tips
+      FROM read_parquet([{parquet_sql}])
+      WHERE PULocationID IS NOT NULL AND pickup_datetime IS NOT NULL
+    ),
+    t AS (
+      SELECT
+        PULocationID,
+        EXTRACT('dow' FROM pickup_datetime) AS dow_i,  -- 0=Sun..6=Sat
+        EXTRACT('hour' FROM pickup_datetime) AS hour_i,
+        EXTRACT('minute' FROM pickup_datetime) AS minute_i,
+        driver_pay,
+        tips
+      FROM base
+    ),
+    binned AS (
+      SELECT
+        PULocationID,
+        dow_i,
+        CAST(FLOOR((hour_i*60 + minute_i) / {int(bin_minutes)}) * {int(bin_minutes)} AS INTEGER) AS bin_start_min,
+        driver_pay,
+        tips
+      FROM t
+    )
+    SELECT
+      PULocationID,
+      dow_i,
+      bin_start_min,
+      COUNT(*) AS pickups,
+      AVG(driver_pay) AS avg_driver_pay,
+      AVG(tips) AS avg_tips
+    FROM binned
+    GROUP BY 1,2,3;
+    """
+
+    df_total = con.execute(sql_total).df()
+    df_win = con.execute(sql_win).df()
+
+    # Normalize DOW: Monday=0..Sunday=6
+    df_win["dow_i"] = df_win["dow_i"].astype(int)
+    df_win["dow_m"] = df_win["dow_i"].apply(lambda d: 6 if d == 0 else d - 1)
+    dow_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    df_win["dow"] = df_win["dow_m"].apply(lambda i: dow_names[int(i)])
+
+    df_win["bin_start_min"] = df_win["bin_start_min"].astype(int)
+    return df_total, df_win
 
 
-def download(url: str, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and path.stat().st_size > 0:
-        return
-    r = requests.get(url, timeout=120)
-    r.raise_for_status()
-    path.write_bytes(r.content)
+def add_window_scores(df_win: pd.DataFrame) -> pd.DataFrame:
+    df = df_win.copy()
 
+    def minmax(s: pd.Series) -> pd.Series:
+        s2 = pd.to_numeric(s, errors="coerce")
+        mn = s2.min(skipna=True)
+        mx = s2.max(skipna=True)
+        if pd.isna(mn) or pd.isna(mx) or mx == mn:
+            return pd.Series([0.0] * len(s2), index=s2.index)
+        return (s2 - mn) / (mx - mn)
 
-def load_taxi_zones(work_dir: Path, simplify_meters: float) -> tuple[gpd.GeoDataFrame, pd.DataFrame]:
-    zzip = work_dir / "taxi_zones.zip"
-    lookup = work_dir / "taxi_zone_lookup.csv"
-    extract_dir = work_dir / "taxi_zones_extracted"
+    # Compare within same dow + time-bin across zones
+    df["vol_n"] = df.groupby(["dow_m", "bin_start_min"])["pickups"].transform(minmax)
+    df["pay_n"] = df.groupby(["dow_m", "bin_start_min"])["avg_driver_pay"].transform(minmax)
+    df["tip_n"] = df.groupby(["dow_m", "bin_start_min"])["avg_tips"].transform(minmax)
 
-    download(TAXI_ZONES_ZIP_URL, zzip)
-    download(TAXI_ZONE_LOOKUP_URL, lookup)
-
-    if not extract_dir.exists():
-        extract_dir.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(zzip, "r") as zf:
-            zf.extractall(extract_dir)
-
-    shp_files = list(extract_dir.rglob("*.shp"))
-    if not shp_files:
-        raise RuntimeError("Could not find .shp inside taxi_zones.zip")
-
-    zones = gpd.read_file(shp_files[0]).to_crs(epsg=4326)
-    if "LocationID" not in zones.columns:
-        # sometimes it is locationid
-        cols_lower = {c.lower(): c for c in zones.columns}
-        if "locationid" in cols_lower:
-            zones = zones.rename(columns={cols_lower["locationid"]: "LocationID"})
-        else:
-            raise RuntimeError(f"Taxi zones shapefile missing LocationID. Columns: {list(zones.columns)}")
-    zones["LocationID"] = zones["LocationID"].astype(int)
-
-    # simplify in meters (project to 3857)
-    if simplify_meters and simplify_meters > 0:
-        z3857 = zones.to_crs(epsg=3857)
-        z3857["geometry"] = z3857.geometry.simplify(float(simplify_meters), preserve_topology=True)
-        zones = z3857.to_crs(epsg=4326)
-
-    lookup_df = pd.read_csv(lookup)
-    return zones[["LocationID", "geometry"]].copy(), lookup_df
+    df["score01"] = (0.60 * df["vol_n"]) + (0.30 * df["pay_n"]) + (0.10 * df["tip_n"])
+    df["rating"] = df["score01"].apply(score_to_rating_1_100)
+    df["fillColor"] = df["score01"].apply(score_to_color_hex)
+    return df
 
 
 def build_hotspots_json(
-    parquet_files: Iterable[Path],
+    parquet_files: List[Path],
     out_path: Path,
     bin_minutes: int = 20,
     good_n: int = 200,
@@ -105,219 +197,175 @@ def build_hotspots_json(
     min_trips_per_window: int = 10,
     simplify_meters: float = 25.0,
 ) -> None:
-    bin_minutes = int(bin_minutes)
-    if bin_minutes <= 0:
-        bin_minutes = 20
+    out_path = Path(out_path)
+    ensure_dir(out_path.parent)
 
-    con = duckdb.connect(database=":memory:")
-    paths = [str(p) for p in parquet_files]
+    meta_dir = out_path.parent / "meta"
+    ensure_dir(meta_dir)
 
-    # DuckDB can read list of paths
-    # Bin time into 20-min windows in a synthetic week:
-    # - dow_i: 0=Sun..6=Sat  => convert to Mon=0..Sun=6
-    # - bin_start_min: minute-of-day bucket start (0..1439)
-    df_total = con.execute(
-        """
-        SELECT
-          CAST(PULocationID AS INTEGER) AS PULocationID,
-          COUNT(*) AS pickups_total
-        FROM read_parquet($1)
-        WHERE PULocationID IS NOT NULL AND pickup_datetime IS NOT NULL
-        GROUP BY 1
-        """,
-        [paths],
-    ).df()
+    zones_gdf, lookup_df = fetch_taxi_zones(meta_dir)
+    lookup_df = lookup_df.copy()
+    lookup_df["LocationID"] = lookup_df["LocationID"].astype(int)
+    lookup_df = lookup_df.set_index("LocationID")
 
-    df_win = con.execute(
-        f"""
-        WITH base AS (
-          SELECT
-            CAST(PULocationID AS INTEGER) AS PULocationID,
-            pickup_datetime,
-            TRY_CAST(driver_pay AS DOUBLE) AS driver_pay,
-            TRY_CAST(tips AS DOUBLE) AS tips
-          FROM read_parquet($1)
-          WHERE PULocationID IS NOT NULL AND pickup_datetime IS NOT NULL
-        ),
-        t AS (
-          SELECT
-            PULocationID,
-            EXTRACT('dow' FROM pickup_datetime) AS dow_i,
-            EXTRACT('hour' FROM pickup_datetime) AS hour_i,
-            EXTRACT('minute' FROM pickup_datetime) AS minute_i,
-            driver_pay,
-            tips
-          FROM base
-        ),
-        binned AS (
-          SELECT
-            PULocationID,
-            dow_i,
-            CAST(FLOOR((hour_i*60 + minute_i) / {bin_minutes}) * {bin_minutes} AS INTEGER) AS bin_start_min,
-            driver_pay,
-            tips
-          FROM t
-        )
-        SELECT
-          PULocationID,
-          dow_i,
-          bin_start_min,
-          COUNT(*) AS pickups,
-          AVG(driver_pay) AS avg_driver_pay,
-          AVG(tips) AS avg_tips
-        FROM binned
-        GROUP BY 1,2,3;
-        """,
-        [paths],
-    ).df()
+    df_total, df_win = build_metrics(parquet_files, bin_minutes=bin_minutes)
 
-    df_win["dow_i"] = df_win["dow_i"].astype(int)
-    df_win["dow_m"] = df_win["dow_i"].apply(lambda d: 6 if d == 0 else d - 1)  # Mon=0..Sun=6
-    df_win["bin_start_min"] = df_win["bin_start_min"].astype(int)
-
-    # Pick GOOD/BAD zone ids overall by volume
+    # overall good/bad selection pool by total pickups
     df_total = df_total.sort_values("pickups_total", ascending=False).copy()
     good_ids = df_total.head(int(good_n))["PULocationID"].astype(int).tolist()
 
     bad_pool = df_total[~df_total["PULocationID"].astype(int).isin(set(good_ids))].copy()
     bad_ids = bad_pool.sort_values("pickups_total", ascending=True).head(int(bad_n))["PULocationID"].astype(int).tolist()
 
-    good_set, bad_set = set(good_ids), set(bad_ids)
     shown_ids = sorted(set(good_ids + bad_ids))
+    good_set = set(good_ids)
+    bad_set = set(bad_ids)
 
-    # Filter windows and shown ids
-    df_win = df_win[df_win["pickups"] >= int(min_trips_per_window)].copy()
-    df_win = df_win[df_win["PULocationID"].astype(int).isin(shown_ids)].copy()
+    # keep only zones we show
+    zones_gdf = zones_gdf[zones_gdf["LocationID"].astype(int).isin(shown_ids)].copy()
+    zones_gdf["LocationID"] = zones_gdf["LocationID"].astype(int)
 
-    # Score per (dow, bin) across zones
-    df_win["vol_n"] = df_win.groupby(["dow_m", "bin_start_min"])["pickups"].transform(minmax)
-    df_win["pay_n"] = df_win.groupby(["dow_m", "bin_start_min"])["avg_driver_pay"].transform(minmax)
-    df_win["tip_n"] = df_win.groupby(["dow_m", "bin_start_min"])["avg_tips"].transform(minmax)
-    df_win["score01"] = (0.60 * df_win["vol_n"]) + (0.30 * df_win["pay_n"]) + (0.10 * df_win["tip_n"])
-    df_win["rating"] = df_win["score01"].apply(score_to_rating_1_100)
-    df_win["fill"] = df_win["score01"].apply(score_to_color_hex)
+    # simplify polygons
+    if float(simplify_meters) > 0:
+        tol = float(simplify_meters)
+        z3857 = zones_gdf.to_crs(epsg=3857)
+        z3857["geometry"] = z3857.geometry.simplify(tolerance=tol, preserve_topology=True)
+        zones_gdf = z3857.to_crs(epsg=4326)
 
-    # Select top/bottom per window to keep JSON small
-    df_win["rank_good"] = df_win.groupby(["dow_m", "bin_start_min"])["score01"].rank(method="first", ascending=False)
-    df_win["rank_bad"] = df_win.groupby(["dow_m", "bin_start_min"])["score01"].rank(method="first", ascending=True)
-    df_sel = df_win[(df_win["rank_good"] <= int(win_good_n)) | (df_win["rank_bad"] <= int(win_bad_n))].copy()
-
-    # Load taxi polygons + lookup
-    work_dir = Path("work")
-    zones_gdf, lookup_df = load_taxi_zones(work_dir, simplify_meters=simplify_meters)
-    lookup_df["LocationID"] = lookup_df["LocationID"].astype(int)
-    lookup_df = lookup_df.set_index("LocationID")
-
-    zones_gdf = zones_gdf[zones_gdf["LocationID"].isin(shown_ids)].copy()
-    zones_by_id = zones_gdf.set_index("LocationID")
-
-    # Centroids for markers
-    centroids = zones_gdf.to_crs(epsg=3857)
-    centroids["centroid"] = centroids.geometry.centroid
-    centroids = gpd.GeoDataFrame(centroids[["LocationID"]], geometry=centroids["centroid"], crs="EPSG:3857").to_crs(epsg=4326)
+    # centroids for markers
+    zones_proj = zones_gdf.to_crs(epsg=3857)
+    zones_proj["centroid"] = zones_proj.geometry.centroid
+    centroids = gpd.GeoDataFrame(
+        zones_proj[["LocationID"]],
+        geometry=zones_proj["centroid"],
+        crs="EPSG:3857"
+    ).to_crs(epsg=4326)
     centroid_by_id = centroids.set_index("LocationID").geometry
 
-    # Build frames in the exact schema your app.js expects
-    week_start = datetime(2025, 1, 6, 0, 0, 0)  # Monday baseline
-    timeline = []
-    frames = []
-
-    def zone_name(zid: int) -> tuple[str, str]:
+    def zone_label(zid: int) -> Tuple[str, str]:
+        zone_name = f"LocationID {zid}"
+        borough = "Unknown"
         if zid in lookup_df.index:
             row = lookup_df.loc[zid]
-            return str(row.get("Zone", f"Zone {zid}")), str(row.get("Borough", "Unknown"))
-        return f"Zone {zid}", "Unknown"
+            borough = str(row.get("Borough", "Unknown"))
+            zone_name = str(row.get("Zone", zone_name))
+        return zone_name, borough
 
-    # group rows by (dow_m, bin_start_min)
-    for (dow_m, bin_start_min), grp in df_sel.groupby(["dow_m", "bin_start_min"]):
-        hour = int(bin_start_min) // 60
-        minute = int(bin_start_min) % 60
-        ts = week_start + timedelta(days=int(dow_m), hours=hour, minutes=minute)
-        tstr = ts.strftime("%Y-%m-%dT%H:%M:%SZ")
-        timeline.append(tstr)
+    # filter low-signal windows
+    df_win = df_win[df_win["pickups"] >= int(min_trips_per_window)].copy()
 
-        poly_features = []
+    df_scored = add_window_scores(df_win)
+    df_scored = df_scored[df_scored["PULocationID"].astype(int).isin(shown_ids)].copy()
+
+    # per-window select top/bottom zones for polygons (keeps JSON smaller)
+    df_scored["rank_good"] = df_scored.groupby(["dow_m", "bin_start_min"])["score01"].rank(method="first", ascending=False)
+    df_scored["rank_bad"] = df_scored.groupby(["dow_m", "bin_start_min"])["score01"].rank(method="first", ascending=True)
+    df_poly = df_scored[(df_scored["rank_good"] <= int(win_good_n)) | (df_scored["rank_bad"] <= int(win_bad_n))].copy()
+
+    zones_by_id = zones_gdf.set_index("LocationID")
+
+    # build timeline frames
+    week_start = datetime(2025, 1, 6, 0, 0, 0)  # Monday
+    frames = []
+    timeline = []
+
+    # group by time window
+    for (dow_m, bin_start_min), g in df_poly.groupby(["dow_m", "bin_start_min"]):
+        dow_m = int(dow_m)
+        bin_start_min = int(bin_start_min)
+        hour = bin_start_min // 60
+        minute = bin_start_min % 60
+
+        ts = week_start + timedelta(days=dow_m, hours=hour, minutes=minute)
+        ts_iso = ts.strftime("%Y-%m-%dT%H:%M:%S")
+
+        features = []
         markers = []
 
-        for _, r in grp.iterrows():
+        # polygons
+        for _, r in g.iterrows():
             zid = int(r["PULocationID"])
             if zid not in zones_by_id.index:
                 continue
-
             geom = zones_by_id.loc[zid].geometry
             if geom is None or geom.is_empty:
                 continue
 
-            tag = "GOOD" if zid in good_set else "BAD"
-            border = "#00b050" if tag == "GOOD" else "#e60000"
-            dash = None if tag == "GOOD" else "6,6"
+            zone_name, borough = zone_label(zid)
 
-            zn, br = zone_name(zid)
             pickups = int(r["pickups"])
             rating = int(r["rating"])
-            pay = None if pd.isna(r["avg_driver_pay"]) else float(r["avg_driver_pay"])
-            tips = None if pd.isna(r["avg_tips"]) else float(r["avg_tips"])
+            fill = str(r["fillColor"])
+
+            # IMPORTANT: tag is ONLY for icons, not for polygon color
+            # Polygon color ALWAYS = rating gradient.
+            tag = "TOP" if float(r["rank_good"]) <= int(win_good_n) else "BOTTOM"
+            border = "#00b050" if tag == "TOP" else "#e60000"
+            dash = None if tag == "TOP" else "6,6"
 
             popup = (
-                f"<b>{zn}</b><br/>"
-                f"{br} — <b>{tag}</b><br/>"
-                f"Rating: <b>{rating}/100</b><br/>"
-                f"Pickups: <b>{pickups}</b><br/>"
-                f"Avg driver pay: <b>${pay:.2f}</b><br/>" if pay is not None else ""
+                f"<div style='font-family:Arial; font-size:13px;'>"
+                f"<div style='font-weight:900; font-size:14px;'>{zone_name}</div>"
+                f"<div style='color:#666; margin-bottom:4px;'>{borough} — <b>{tag}</b></div>"
+                f"<div><b>Window:</b> {r['dow']} {hour:02d}:{minute:02d} ({bin_minutes}m)</div>"
+                f"<div><b>Rating:</b> <span style='font-weight:900; color:{fill};'>{rating}/100</span></div>"
+                f"<hr style='margin:6px 0;'>"
+                f"<div><b>Pickups:</b> {pickups}</div>"
+                f"</div>"
             )
-            if tips is not None:
-                popup += f"Avg tips: <b>${tips:.2f}</b><br/>"
 
-            poly_features.append({
+            features.append({
                 "type": "Feature",
                 "geometry": geom.__geo_interface__,
                 "properties": {
+                    # ✅ REAL numeric fields (frontend can trust these)
+                    "time": ts_iso,
+                    "LocationID": zid,
+                    "zone": zone_name,
+                    "borough": borough,
+                    "tag": tag,             # TOP or BOTTOM (extremes only)
+                    "pickups": pickups,     # numeric
+                    "rating": rating,       # numeric 1-100
+                    "popup": popup,
                     "style": {
                         "color": border,
                         "weight": 2,
                         "dashArray": dash,
-                        "fillColor": str(r["fill"]),
+                        "fillColor": fill,    # gradient color already computed
                         "fillOpacity": 0.55,
                     },
-                    "popup": popup
-                }
+                },
             })
 
-            # marker centroid
-            if zid in centroid_by_id.index:
-                pt = centroid_by_id.loc[zid]
-                if pt is not None and (not pt.is_empty):
-                    markers.append({
-                        "tag": tag,
-                        "lat": float(pt.y),
-                        "lng": float(pt.x),
-                        "zone": zn,
-                        "borough": br,
-                        "rating": rating,
-                        "color": str(r["fill"]),
-                        "pickups": pickups,
-                        "avg_driver_pay": pay,
-                        "avg_tips": tips,
-                    })
+            # markers = ONLY extremes (TOP/BOTTOM)
+            pt = centroid_by_id.get(zid)
+            if pt is not None and (not pt.is_empty):
+                markers.append({
+                    "lat": float(pt.y),
+                    "lng": float(pt.x),
+                    "zone": zone_name,
+                    "borough": borough,
+                    "tag": "GOOD" if tag == "TOP" else "BAD",
+                    "pickups": pickups,
+                    "rating": rating,
+                    "color": fill,
+                    "avg_driver_pay": float(r["avg_driver_pay"]) if pd.notna(r["avg_driver_pay"]) else None,
+                    "avg_tips": float(r["avg_tips"]) if pd.notna(r["avg_tips"]) else None,
+                })
 
-        frames.append({
-            "time": tstr,
-            "polygons": {"type": "FeatureCollection", "features": poly_features},
-            "markers": markers
-        })
+        fc = {"type": "FeatureCollection", "features": features}
+        frames.append({"time": ts_iso, "polygons": fc, "markers": markers})
+        timeline.append(ts_iso)
 
-    # sort timeline/frames just in case
-    frames.sort(key=lambda f: f["time"])
-    timeline = [f["time"] for f in frames]
-
-    out = {
+    payload = {
         "meta": {
-            "bin_minutes": bin_minutes,
-            "generated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "source_files": [Path(p).name for p in paths],
+            "bin_minutes": int(bin_minutes),
+            "min_trips_per_window": int(min_trips_per_window),
+            "win_good_n": int(win_good_n),
+            "win_bad_n": int(win_bad_n),
         },
         "timeline": timeline,
-        "frames": frames
+        "frames": frames,
     }
 
-    out_path.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+    out_path.write_text(json.dumps(payload, ensure_ascii=False))
