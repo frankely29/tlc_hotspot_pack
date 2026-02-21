@@ -12,110 +12,65 @@
     html, body { height: 100%; margin: 0; }
     #map { height: 100%; width: 100%; }
 
-    /* Small, non-blocking top-left legend */
+    /* Small, non-blocking legend (top-left) */
     .panel {
       position: fixed; top: 10px; left: 10px; z-index: 9999;
       background: rgba(255,255,255,0.92);
       padding: 8px 10px;
       border: 2px solid #111; border-radius: 10px;
       font-family: Arial, sans-serif; font-size: 12px;
-      max-width: 280px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.18);
-      backdrop-filter: blur(4px);
+      max-width: 260px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.25);
     }
-    .panel h3 {
-      margin: 0 0 6px 0;
-      font-size: 13px;
-      font-weight: 900;
-    }
-    .bar {
-      height: 10px; width: 100%;
-      border: 1px solid #333;
-      border-radius: 6px;
-      background: linear-gradient(90deg, #e53935 0%, #79c7ff 33%, #1e5bff 66%, #22c55e 100%);
-      margin: 6px 0 6px 0;
-    }
-    .legendRow {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 6px 10px;
-      margin-top: 4px;
-    }
-    .dot {
-      display:inline-block; width:10px; height:10px; border-radius:50%;
-      margin-right: 6px; border:1px solid rgba(0,0,0,0.25);
-      vertical-align: -1px;
-    }
-    .muted { color:#444; line-height: 1.25; margin-top: 6px; }
-    .statusLine { margin-top: 6px; font-weight: 700; }
-    .statusOk { color: #0f7a2a; }
-    .statusBad { color: #b42318; }
+    .panelTitle { font-weight: 900; font-size: 13px; margin-bottom: 6px; }
+    .legendRow { display:flex; align-items:center; gap:8px; margin: 4px 0; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display:inline-block; border: 1px solid rgba(0,0,0,0.25); }
+    .small { font-size: 11px; color: #333; line-height: 1.25; margin-top: 6px; }
 
-    .btnRow { display:flex; gap:8px; margin-top:8px; }
-    button {
-      font-family: Arial, sans-serif;
-      font-weight: 800;
-      font-size: 12px;
-      padding: 8px 10px;
-      border-radius: 10px;
-      border: 2px solid #111;
-      background: #fff;
-      cursor: pointer;
-    }
-
-    /* Bottom slider */
+    /* Slider bar bottom */
     .sliderWrap {
-      position: fixed; left: 10px; right: 10px; bottom: 14px; z-index: 9999;
+      position: fixed; left: 10px; right: 10px; bottom: 12px; z-index: 9999;
       background: rgba(255,255,255,0.92);
-      border: 2px solid #111; border-radius: 12px;
+      border: 2px solid #111; border-radius: 10px;
       padding: 10px 12px;
       font-family: Arial, sans-serif;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.18);
-      backdrop-filter: blur(4px);
+      box-shadow: 0 2px 10px rgba(0,0,0,0.25);
     }
-    .timeLabel { font-weight: 900; font-size: 16px; }
-    .timeSub { font-size: 12px; color:#444; margin-top: 2px; }
-    input[type="range"] { width: 100%; margin-top: 8px; }
+    input[type="range"] { width: 100%; }
+    .timeLabel { font-weight: 900; }
+    .subLabel { font-size: 11px; color: #444; margin-top: 2px; }
+    .errorLine { margin-top: 6px; font-size: 11px; color: #b00000; font-weight: 700; white-space: pre-wrap; }
   </style>
+
+  <script>
+    // IMPORTANT: Your GitHub Pages map reads data from Railway ONLY.
+    window.RAILWAY_BASE_URL = "https://web-production-78f67.up.railway.app";
+  </script>
 </head>
 
 <body>
   <div id="map"></div>
 
   <div class="panel">
-    <h3>NYC HVFHV Zones (1–100)</h3>
-    <div class="bar"></div>
+    <div class="panelTitle">NYC HVFHV Zones (1–100)</div>
 
-    <div class="legendRow">
-      <div><span class="dot" style="background:#22c55e;"></span><b>Green</b> = Best</div>
-      <div><span class="dot" style="background:#1e5bff;"></span><b>Blue</b> = Medium</div>
-      <div><span class="dot" style="background:#79c7ff;"></span><b>Sky</b> = Normal</div>
-      <div><span class="dot" style="background:#e53935;"></span><b>Red</b> = Avoid</div>
-    </div>
+    <div class="legendRow"><span class="dot" style="background:#18a84a;"></span><b>Green</b> = Best</div>
+    <div class="legendRow"><span class="dot" style="background:#1f57ff;"></span><b>Blue</b> = Medium</div>
+    <div class="legendRow"><span class="dot" style="background:#64c8ff;"></span><b>Sky</b> = Normal</div>
+    <div class="legendRow"><span class="dot" style="background:#e53935;"></span><b>Red</b> = Avoid</div>
 
-    <div class="muted">
-      • Colors come from <b>rating (1–100)</b> for the selected <b>20-minute</b> window.<br>
-      • Data is loaded from <b>Railway only</b>.
-    </div>
-
-    <div id="status" class="statusLine">Loading…</div>
-
-    <div class="btnRow">
-      <button id="btnGenerate" type="button">Generate</button>
-      <button id="btnReload" type="button">Reload</button>
+    <div class="small">
+      • Colors come from <b>rating (1–100)</b> for the selected 20-minute window.<br>
+      • Data loads from <b>Railway</b> only.
     </div>
   </div>
 
   <div class="sliderWrap">
     <div class="timeLabel" id="timeLabel">Loading…</div>
-    <div class="timeSub" id="timeSub">NYC time</div>
+    <div class="subLabel" id="tzLabel">NYC time</div>
     <input id="slider" type="range" min="0" max="0" step="1" value="0" />
+    <div class="errorLine" id="errorLine"></div>
   </div>
-
-  <!-- IMPORTANT: Set your Railway base URL here (prevents “Missing window.RAILWAY_BASE_URL”) -->
-  <script>
-    window.RAILWAY_BASE_URL = "https://web-production-78f67.up.railway.app";
-  </script>
 
   <script src="./app.js"></script>
 </body>
