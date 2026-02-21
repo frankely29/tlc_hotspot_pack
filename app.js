@@ -111,12 +111,30 @@ function getFeatureRating(properties){
     return clamp(Number(score01) * 100, 1, 100);
   }
 
-  const waitMinutes = p.wait_minutes ?? p.wait_time_minutes ?? p.wait_time ?? p.wait;
-  if (waitMinutes !== null && waitMinutes !== undefined && Number.isFinite(Number(waitMinutes))){
-    return Number(waitMinutes);
+  return null;
+}
+
+function getFeatureEstimatedWaitMinutes(properties){
+  const p = properties || {};
+  const directWait = p.wait_minutes ?? p.wait_time_minutes ?? p.wait_time ?? p.wait ?? p.estimated_wait_minutes ?? p.estimated_wait_min;
+  if (directWait !== null && directWait !== undefined && Number.isFinite(Number(directWait))){
+    return Math.max(0, Number(directWait));
+  }
+
+  const pickups = Number(p.pickups);
+  const binMinutes = Number(payloadMeta?.bin_minutes ?? 20);
+  if (Number.isFinite(pickups) && pickups > 0 && Number.isFinite(binMinutes) && binMinutes > 0){
+    return binMinutes / pickups;
   }
 
   return null;
+}
+
+function formatEstimatedWait(waitMins){
+  if (!Number.isFinite(waitMins)) return "n/a";
+  if (waitMins < 1) return "< 1 min";
+  if (waitMins < 10) return `${waitMins.toFixed(1)} min`;
+  return `${Math.round(waitMins)} min`;
 }
 
 function buildPolygonStyle(feature){
@@ -169,11 +187,22 @@ const polyLayer = L.geoJSON(null, {
         { maxWidth: 320 }
       );
     }
+
+    const estWait = getFeatureEstimatedWaitMinutes(p);
+    layer.bindTooltip(
+      `<div style="font-weight:800;">${p.zone || "Zone"}</div><div>Est. wait: <b>${formatEstimatedWait(estWait)}</b></div>`,
+      {
+        permanent: true,
+        direction: "center",
+        className: "zone-wait-tooltip"
+      }
+    );
   }
 }).addTo(map);
 
 let timeline = [];
 let dataByTime = new Map();
+let payloadMeta = {};
 let liveTimer = null;
 let isLiveMode = true;
 
@@ -263,6 +292,7 @@ async function fetchHotspots(){
   // Expect: { timeline: [...], frames: [{time, polygons, ...}, ...] }
   timeline = payload.timeline || [];
   dataByTime = new Map((payload.frames || []).map(f => [f.time, f]));
+  payloadMeta = payload.meta || {};
 
   if (!timeline.length || !dataByTime.size){
     throw new Error("Data format missing timeline/frames (JSON shape changed).");
