@@ -8,6 +8,38 @@
 
 function clamp(x, a, b){ return Math.max(a, Math.min(b, x)); }
 
+function getTimelineIndexNearestNow(){
+  if (!timeline.length) return 0;
+
+  const nowMs = Date.now();
+  let bestIdx = 0;
+  let bestDiff = Number.POSITIVE_INFINITY;
+
+  for (let i = 0; i < timeline.length; i += 1){
+    const t = new Date(timeline[i]).getTime();
+    if (!Number.isFinite(t)) continue;
+    const diff = Math.abs(t - nowMs);
+    if (diff < bestDiff){
+      bestDiff = diff;
+      bestIdx = i;
+    }
+  }
+
+  return bestIdx;
+}
+
+function updateCurrentTimeLabel(){
+  const currentTimeLabel = document.getElementById("currentTimeLabel");
+  if (!currentTimeLabel) return;
+  currentTimeLabel.textContent = `Current NYC time: ${new Date().toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit"
+  })}`;
+}
+
 // Force NYC timezone labels
 function formatTimeLabel(iso){
   const d = new Date(iso);
@@ -157,10 +189,12 @@ async function fetchHotspots(){
 
 function setupSlider(){
   const slider = document.getElementById("slider");
+  const startIndex = getTimelineIndexNearestNow();
+
   slider.min = 0;
   slider.max = Math.max(0, timeline.length - 1);
   slider.step = 1;
-  slider.value = 0;
+  slider.value = startIndex;
 
   // iPhone smoothness
   let pending = null;
@@ -200,9 +234,11 @@ async function main(){
   }
 
   setupSlider();
+  updateCurrentTimeLabel();
+  setInterval(updateCurrentTimeLabel, 1000 * 30);
 
-  // show first frame
-  rebuildAtIndex(0);
+  // show frame nearest current NYC time
+  rebuildAtIndex(getTimelineIndexNearestNow());
 }
 
 main();

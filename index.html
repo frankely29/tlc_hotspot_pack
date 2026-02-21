@@ -75,6 +75,7 @@
     }
     input[type="range"] { width: 100%; }
     .timeLabel { font-weight: 900; font-size: 18px; }
+    .currentTimeLabel { margin-top: 4px; font-size: 12px; color: #222; }
   </style>
 
   <script>
@@ -110,6 +111,7 @@
 
   <div class="sliderWrap">
     <div class="timeLabel" id="timeLabel">Loading…</div>
+    <div class="currentTimeLabel" id="currentTimeLabel">Current NYC time: --</div>
     <input id="slider" type="range" min="0" max="0" step="1" value="0" />
   </div>
 
