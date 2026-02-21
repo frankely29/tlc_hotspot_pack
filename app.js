@@ -1,5 +1,13 @@
-function clamp01(x){ return Math.max(0, Math.min(1, x)); }
+// =======================
+// TLC Hotspot Map - app.js
+// - Phone-friendly
+// - Prevent polygons covering markers (Leaflet panes)
+// - Time label forced to NYC time
+// - Slider throttled (smooth on iPhone)
+// - Works with Railway-generated hotspots_20min.json
+// =======================
 
+function clamp01(x){ return Math.max(0, Math.min(1, x)); }
 function lerp(a,b,t){ return a + (b-a)*t; }
 
 function scoreToColorHex(score01){
@@ -30,10 +38,15 @@ function fmtNum(x, nd=2){
   return Number(x).toFixed(nd);
 }
 
+// IMPORTANT: force NYC timezone so labels match NYC
 function formatTimeLabel(iso){
   const d = new Date(iso);
-  // Example: Mon 7:40 PM
-  return d.toLocaleString(undefined, { weekday:"short", hour:"numeric", minute:"2-digit" });
+  return d.toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    weekday:"short",
+    hour:"numeric",
+    minute:"2-digit"
+  });
 }
 
 const map = L.map('map', { zoomControl: true }).setView([40.72, -73.98], 12);
@@ -41,7 +54,16 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
   attribution: '&copy; OpenStreetMap &copy; CARTO'
 }).addTo(map);
 
+// --- PANES so polygons never cover markers (fixes “inconsistencies” on phone) ---
+map.createPane("polys");
+map.getPane("polys").style.zIndex = 400;
+
+map.createPane("markers");
+map.getPane("markers").style.zIndex = 650;
+
+// Layers
 const polyLayer = L.geoJSON(null, {
+  pane: "polys",
   style: (f) => f?.properties?.style || {color:"#555", weight:1, fillOpacity:0.4},
   onEachFeature: (feature, layer) => {
     const p = feature.properties || {};
@@ -64,21 +86,26 @@ function rebuildAtIndex(idx){
   polyLayer.clearLayers();
   markerLayer.clearLayers();
 
-  // Add polygons
-  if (bundle.polygons) {
-    polyLayer.addData(bundle.polygons);
-  }
+  // Polygons for this time window
+  if (bundle.polygons) polyLayer.addData(bundle.polygons);
 
-  // Add markers (dynamic)
+  // Markers for this time window (if present)
   for (const m of (bundle.markers || [])){
     const tag = m.tag; // GOOD/BAD
+
     const iconHtml = tag === "GOOD"
-      ? '<div style="font-weight:900; color:#00b050; font-size:18px;">✔</div>'
-      : '<div style="font-weight:900; color:#e60000; font-size:18px;">✖</div>';
+      ? '<div style="font-weight:900; color:#00b050; font-size:18px; line-height:18px;">✔</div>'
+      : '<div style="font-weight:900; color:#e60000; font-size:18px; line-height:18px;">✖</div>';
 
-    const icon = L.divIcon({ html: iconHtml, className: "", iconSize: [18,18] });
+    const icon = L.divIcon({
+      html: iconHtml,
+      className: "",
+      iconSize: [18,18],
+      iconAnchor: [9,9]
+    });
 
-    const marker = L.marker([m.lat, m.lng], { icon });
+    const marker = L.marker([m.lat, m.lng], { icon, pane: "markers" });
+
     const popup = `
       <div style="font-family:Arial; font-size:13px;">
         <div style="font-weight:900; font-size:14px;">${m.zone}</div>
@@ -90,29 +117,21 @@ function rebuildAtIndex(idx){
         <div><b>Avg tips:</b> ${fmtMoney(m.avg_tips)}</div>
       </div>
     `;
+
     marker.bindPopup(popup, { maxWidth: 360 });
     marker.addTo(markerLayer);
   }
 }
 
 async function main(){
-  // IMPORTANT: Load the JSON from Railway (not GitHub) to avoid 25MB limit
-  const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
-  const DATA_URL = `${RAILWAY_BASE}/hotspots_20min.json?ts=${Date.now()}`;
-
-  const res = await fetch(DATA_URL, { cache: "no-store" });
-  if (!res.ok) throw new Error(`Failed to fetch hotspots JSON (${res.status}). Is Railway /generate done?`);
+  // This file must exist in repo root (GitHub Pages):
+  // hotspots_20min.json
+  const res = await fetch("./hotspots_20min.json", { cache: "no-store" });
+  if (!res.ok) throw new Error("Missing hotspots_20min.json in repo root");
   const payload = await res.json();
 
-  // Your Railway payload should be: { timeline: [...], frames: [...] }
-  // But if timeline is missing, build it from frames.
-  const frames = Array.isArray(payload.frames) ? payload.frames : [];
-  timeline = Array.isArray(payload.timeline) && payload.timeline.length
-    ? payload.timeline
-    : frames.map(f => f.time).filter(Boolean);
-
-  // Make sure frames are keyed by .time
-  dataByTime = new Map(frames.map(f => [f.time, f]));
+  timeline = payload.timeline || [];
+  dataByTime = new Map((payload.frames || []).map(f => [f.time, f]));
 
   const slider = document.getElementById("slider");
   slider.min = 0;
@@ -120,14 +139,21 @@ async function main(){
   slider.step = 1;
   slider.value = 0;
 
+  // THROTTLED slider for iPhone smoothness
+  let pending = null;
   slider.addEventListener("input", () => {
-    rebuildAtIndex(Number(slider.value));
+    pending = Number(slider.value);
+    if (slider._raf) return;
+    slider._raf = requestAnimationFrame(() => {
+      slider._raf = null;
+      if (pending !== null) rebuildAtIndex(pending);
+    });
   });
 
   if (timeline.length > 0){
     rebuildAtIndex(0);
   } else {
-    document.getElementById("timeLabel").textContent = "No data in hotspots JSON (frames empty)";
+    document.getElementById("timeLabel").textContent = "No data in hotspots_20min.json";
   }
 }
 
