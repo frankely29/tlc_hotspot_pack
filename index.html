@@ -1,66 +1,190 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>NYC TLC Hotspot Map</title>
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <style>
-    html, body { height: 100%; margin: 0; }
-    #map { height: 100%; width: 100%; }
-
-    .panel {
-      position: fixed; top: 12px; left: 12px; z-index: 9999;
-      background: rgba(255,255,255,0.96);
-      padding: 10px 12px; border: 2px solid #111; border-radius: 10px;
-      font-family: Arial, sans-serif; font-size: 14px; max-width: 420px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      background: #ffffff;
+      overscroll-behavior: none;
+      -webkit-text-size-adjust: 100%;
     }
-    .row { display: flex; align-items: center; gap: 10px; }
+
+    #map {
+      height: 100%;
+      width: 100%;
+    }
+
+    /* ===== TOP LEGEND PANEL ===== */
+    .panel {
+      position: fixed;
+      top: calc(12px + env(safe-area-inset-top));
+      left: calc(12px + env(safe-area-inset-left));
+      right: calc(12px + env(safe-area-inset-right));
+      z-index: 9999;
+
+      background: rgba(255,255,255,0.96);
+      padding: 12px 14px;
+      border: 2px solid #111;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+
+      font-family: Arial, sans-serif;
+      font-size: 14px;
+      max-width: 520px;
+    }
+
+    .title {
+      font-weight: 900;
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
     .bar {
-      height: 12px; width: 210px; border: 1px solid #333;
+      height: 12px;
+      flex: 1;
+      min-width: 140px;
+      border: 1px solid #333;
+      border-radius: 4px;
       background: linear-gradient(90deg, #e60000, #ffd700, #00b050);
     }
-    .small { font-size: 12px; color: #444; line-height: 1.35; margin-top: 8px; }
-    .sliderWrap {
-      position: fixed; left: 12px; right: 12px; bottom: 16px; z-index: 9999;
-      background: rgba(255,255,255,0.96);
-      border: 2px solid #111; border-radius: 10px;
-      padding: 10px 12px;
-      font-family: Arial, sans-serif;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+
+    .ticks {
+      display: flex;
+      justify-content: space-between;
+      width: 120px;
+      font-weight: 700;
+      color: #222;
     }
-    input[type="range"] { width: 100%; }
-    .timeLabel { font-weight: 900; }
+
+    .legend-icons {
+      margin-top: 8px;
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .legend-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border: 1px solid #ccc;
+      border-radius: 999px;
+      background: #fff;
+      font-weight: 800;
+    }
+
+    .small {
+      font-size: 12px;
+      color: #444;
+      line-height: 1.4;
+      margin-top: 8px;
+    }
+
+    /* ===== BOTTOM SLIDER ===== */
+    .sliderWrap {
+      position: fixed;
+      left: calc(12px + env(safe-area-inset-left));
+      right: calc(12px + env(safe-area-inset-right));
+      bottom: calc(16px + env(safe-area-inset-bottom));
+      z-index: 9999;
+
+      background: rgba(255,255,255,0.96);
+      border: 2px solid #111;
+      border-radius: 12px;
+      padding: 12px 14px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+
+      font-family: Arial, sans-serif;
+    }
+
+    .timeLabel {
+      font-weight: 900;
+      font-size: 18px;
+      margin-bottom: 6px;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      height: 28px;
+      -webkit-appearance: none;
+      background: transparent;
+    }
+
+    input[type="range"]::-webkit-slider-runnable-track {
+      height: 6px;
+      background: #cfcfcf;
+      border-radius: 999px;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      margin-top: -9px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: #2b6cff;
+      border: 2px solid #0f2c7a;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+    }
+
+    /* Prevent text selection while sliding */
+    .noSelect {
+      -webkit-user-select: none;
+      user-select: none;
+    }
   </style>
 </head>
+
 <body>
   <div id="map"></div>
 
-  <div class="panel">
-    <div style="font-weight:900; font-size:15px; margin-bottom:8px;">
-      NYC HVFHV Pickup Zones (1–100)
-    </div>
-    <div class="row" style="margin-bottom:8px;">
+  <div class="panel noSelect">
+    <div class="title">NYC HVFHV Pickup Zones (1–100)</div>
+
+    <div class="row">
       <div class="bar"></div>
-      <div style="display:flex; justify-content:space-between; width:160px;">
-        <span>1</span><span>50</span><span>100</span>
+      <div class="ticks">
+        <span>Low</span>
+        <span>High</span>
       </div>
     </div>
-    <div class="row" style="gap:14px; margin-bottom:6px;">
-      <div><span style="color:#00b050; font-weight:900;">✔</span> GOOD</div>
-      <div><span style="color:#e60000; font-weight:900;">✖</span> BAD</div>
+
+    <div class="legend-icons">
+      <div class="legend-chip">
+        <span style="color:#00b050; font-weight:900;">✔</span>
+        <span>Very Good Zone</span>
+      </div>
+      <div class="legend-chip">
+        <span style="color:#e60000; font-weight:900;">✖</span>
+        <span>Very Low Zone</span>
+      </div>
     </div>
+
     <div class="small">
-      • Use the 20-minute slider at the bottom.<br>
-      • Zones + icons update as you slide.
+      • Polygon color = rating (Red → Yellow → Green).<br>
+      • Icons appear only for extreme zones.<br>
+      • Slide the 20-minute timeline below.
     </div>
   </div>
 
-  <div class="sliderWrap">
+  <div class="sliderWrap noSelect">
     <div class="timeLabel" id="timeLabel">Loading…</div>
     <input id="slider" type="range" min="0" max="0" step="1" value="0" />
   </div>
