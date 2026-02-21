@@ -5,18 +5,18 @@
 //   Green Best, Blue Medium, Sky Normal, Red Avoid
 // - NYC time label
 // - Slider starts at closest time window to "NOW" in NYC (week wrap)
-// - No icons
+// - No icons, no checkmarks, no X
 // - No polygon outline (stroke disabled)
 // =======================
 
-function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
+function clamp(n, a, b){ return Math.max(a, Math.min(b, n)); }
 
-function setStatus(msg) {
+function setStatus(msg){
   const el = document.getElementById("statusText");
   if (el) el.textContent = msg;
 }
 
-function nycTimeLabel(iso) {
+function nycTimeLabel(iso){
   const d = new Date(iso);
   return d.toLocaleString("en-US", {
     timeZone: "America/New_York",
@@ -26,7 +26,7 @@ function nycTimeLabel(iso) {
   });
 }
 
-function getNYCParts(date = new Date()) {
+function getNYCParts(date = new Date()){
   const fmt = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     weekday: "short",
@@ -50,20 +50,20 @@ function getNYCParts(date = new Date()) {
   };
 }
 
-function timelineMinuteOfWeekNYC(iso) {
+function timelineMinuteOfWeekNYC(iso){
   const d = new Date(iso);
   const parts = getNYCParts(d);
   return parts.dow * 1440 + parts.minuteOfDay;
 }
 
-function addMinutesISO(iso, minutes) {
+function addMinutesISO(iso, minutes){
   const d = new Date(iso);
   return new Date(d.getTime() + minutes * 60 * 1000).toISOString();
 }
 
-// ✅ STRICT bucket colors (ONLY these 4)
-function ratingToColor(rating) {
-  const r = clamp(Number(rating || 0), 0, 100);
+// ✅ STRICT bucket colors
+function ratingToColor(rating1to100){
+  const r = clamp(Number(rating1to100 || 0), 1, 100);
 
   // Red = Avoid (lowest)
   if (r <= 25) return "#d32f2f";
@@ -75,7 +75,7 @@ function ratingToColor(rating) {
   return "#2e7d32";
 }
 
-function getRailwayBase() {
+function getRailwayBase(){
   const base = window.RAILWAY_BASE_URL;
   if (!base || !String(base).trim()) return null;
   return String(base).replace(/\/+$/, "");
@@ -84,10 +84,41 @@ function getRailwayBase() {
 const BASE = getRailwayBase();
 const BIN_MINUTES = 20;
 
+// ✅ SINGLE SOURCE OF TRUTH: extract + normalize rating into 1–100
+function getRating1to100(props){
+  const p = props || {};
+
+  // Try common field names (Railway/backend variations)
+  let v =
+    p.rating ??
+    p.rating_1_100 ??
+    p.score01 ??
+    p.rating01 ??
+    p.score ??
+    p.value ??
+    null;
+
+  if (v === null || v === undefined) return null;
+
+  v = Number(v);
+  if (!Number.isFinite(v)) return null;
+
+  // IMPORTANT:
+  // - If backend sends 0–1, scale -> 1–100 (fixes "everything red")
+  // - If backend sends 1–10, scale -> 10–100
+  // - If backend sends 1–100, keep as is
+  // - If backend sends 0 or negative, treat as missing (neutral gray)
+  if (v <= 0) return null;
+
+  if (v > 0 && v <= 1) return clamp(Math.round(1 + 99 * v), 1, 100);      // 0–1 -> 1–100
+  if (v > 1 && v <= 10) return clamp(Math.round(v * 10), 1, 100);         // 1–10 -> 10–100
+  return clamp(Math.round(v), 1, 100);                                     // already 1–100
+}
+
 const map = L.map("map", { zoomControl: true }).setView([40.72, -73.98], 12);
 
 L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-  attribution: "&copy; OpenStreetMap &copy; CARTO"
+  attribution: '&copy; OpenStreetMap &copy; CARTO'
 }).addTo(map);
 
 map.createPane("polys");
@@ -96,18 +127,10 @@ map.getPane("polys").style.zIndex = 400;
 const polyLayer = L.geoJSON(null, {
   pane: "polys",
   style: (feature) => {
-    const p = feature?.properties || {};
+    const rating = getRating1to100(feature?.properties);
 
-    // Support a few backend variations, but still produce a strict 1–100 rating.
-    const rating =
-      p.rating ??
-      p.rating_1_100 ??
-      (p.rating01 !== undefined ? Math.round(1 + 99 * Number(p.rating01)) : null) ??
-      (p.score01 !== undefined ? Math.round(1 + 99 * Number(p.score01)) : null) ??
-      (p.score !== undefined ? Number(p.score) : null);
-
-    // ✅ IMPORTANT: NO OUTLINE
-    if (rating !== null && rating !== undefined && !Number.isNaN(Number(rating))) {
+    // ✅ NO OUTLINE
+    if (rating !== null){
       return {
         stroke: false,
         fillColor: ratingToColor(rating),
@@ -115,7 +138,7 @@ const polyLayer = L.geoJSON(null, {
       };
     }
 
-    // Missing rating -> neutral gray (NOT red)
+    // Missing rating -> neutral light gray (NOT red)
     return {
       stroke: false,
       fillColor: "#e0e0e0",
@@ -124,11 +147,7 @@ const polyLayer = L.geoJSON(null, {
   },
   onEachFeature: (feature, layer) => {
     const p = feature?.properties || {};
-    const rating =
-      p.rating ??
-      p.rating_1_100 ??
-      (p.score01 !== undefined ? Math.round(1 + 99 * Number(p.score01)) : null) ??
-      (p.score !== undefined ? Number(p.score) : null);
+    const rating = getRating1to100(p);
 
     const zone = p.zone || p.name || p.LocationID || "Zone";
     const borough = p.borough || p.Borough || "";
@@ -151,76 +170,48 @@ const btnGenerate = document.getElementById("btnGenerate");
 
 let timeline = [];
 
-// ---------- Railway-only API helpers ----------
-async function apiGET(path) {
+// ---------- API (Railway only) ----------
+async function apiGET(path){
   const url = `${BASE}${path}`;
-  const res = await fetch(url, {
-    cache: "no-store",
-    headers: { "accept": "application/json" }
-  });
-  return res;
+  return await fetch(url, { cache: "no-store", headers: { "accept": "application/json" } });
 }
-
-async function apiPOST(path) {
+async function apiPOST(path){
   const url = `${BASE}${path}`;
-  const res = await fetch(url, {
+  return await fetch(url, {
     method: "POST",
-    cache: "no-store",
     headers: { "accept": "application/json" },
     body: ""
   });
-  return res;
 }
 
-// Try both common base route layouts:
-//  - /timeline, /frame/{idx}
-//  - /api/timeline, /api/frame/{idx}
-async function getJSONWithFallback(paths) {
-  let lastErr = null;
-
-  for (const p of paths) {
-    try {
-      const res = await apiGET(p);
-      if (!res.ok) {
-        const txt = await res.text().catch(() => "");
-        lastErr = new Error(`GET ${p} -> ${res.status} ${txt}`);
-        continue;
-      }
-      return await res.json();
-    } catch (e) {
-      lastErr = e;
-    }
-  }
-  throw lastErr || new Error("Request failed");
+function sortTimeline(){
+  timeline.sort((a,b) => new Date(a).getTime() - new Date(b).getTime());
 }
 
-function sortTimeline() {
-  timeline.sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
-}
-
-function setSliderBounds() {
+function setSliderBounds(){
   slider.min = 0;
   slider.max = Math.max(0, timeline.length - 1);
   slider.step = 1;
 }
 
-function pickIndexClosestToNow() {
+// Pick index closest to CURRENT NYC day/time, regardless of anchor date (week-wrap)
+function pickIndexClosestToNow(){
   if (!timeline.length) return 0;
 
   const nycNow = getNYCParts();
   const nowMinuteOfWeek = nycNow.dow * 1440 + nycNow.minuteOfDay;
+  const weekMinutes = 7 * 24 * 60;
 
   let bestIdx = 0;
   let bestDiff = Infinity;
-  const weekMinutes = 7 * 24 * 60;
 
-  for (let i = 0; i < timeline.length; i++) {
+  for (let i=0; i<timeline.length; i++){
     const tMinuteOfWeek = timelineMinuteOfWeekNYC(timeline[i]);
     const directDiff = Math.abs(tMinuteOfWeek - nowMinuteOfWeek);
     const wrapDiff = weekMinutes - directDiff;
     const diff = Math.min(directDiff, wrapDiff);
 
-    if (diff < bestDiff) {
+    if (diff < bestDiff){
       bestDiff = diff;
       bestIdx = i;
     }
@@ -228,38 +219,33 @@ function pickIndexClosestToNow() {
   return bestIdx;
 }
 
-async function loadTimeline() {
-  const data = await getJSONWithFallback(["/timeline", "/api/timeline"]);
+async function loadTimeline(){
+  const res = await apiGET("/timeline");
+  if (!res.ok){
+    const txt = await res.text().catch(()=> "");
+    throw new Error(`Failed /timeline (${res.status}). ${txt}`);
+  }
 
-  // Supports:
-  //  - { timeline: [...] }
-  //  - [...] (array)
-  const t = Array.isArray(data) ? data : (data?.timeline || []);
-  timeline = t.filter(Boolean);
+  const data = await res.json();
+
+  // Accept BOTH shapes: {timeline:[...]} OR [...]
+  timeline = Array.isArray(data) ? data : (data.timeline || []);
   sortTimeline();
 }
 
-async function loadFrame(i) {
-  const idx = encodeURIComponent(i);
-  const data = await getJSONWithFallback([`/frame/${idx}`, `/api/frame/${idx}`]);
-
-  // Supports:
-  //  - { time, polygons }
-  //  - { time, geojson }
-  //  - raw geojson FeatureCollection
-  if (data?.polygons) return { time: data.time, polygons: data.polygons };
-  if (data?.geojson) return { time: data.time, polygons: data.geojson };
-  if (data?.type === "FeatureCollection") return { time: data.time, polygons: data };
-
-  // last resort: try "features" wrapper
-  if (data?.features && data?.type) return { time: data.time, polygons: data };
-
-  return { time: data?.time, polygons: null };
+async function loadFrame(i){
+  // STRICT: /frame/{idx}
+  const res = await apiGET(`/frame/${encodeURIComponent(i)}`);
+  if (!res.ok){
+    const txt = await res.text().catch(()=> "");
+    throw new Error(`Failed /frame/${i} (${res.status}). ${txt}`);
+  }
+  return await res.json();
 }
 
-function renderFrame(frame) {
+function renderFrame(frame){
   const t = frame?.time;
-  if (t) {
+  if (t){
     const endISO = addMinutesISO(t, BIN_MINUTES);
     const startNY = nycTimeLabel(t);
     const endNY = nycTimeLabel(endISO).replace(/^[A-Za-z]{3}\s/, "");
@@ -269,11 +255,14 @@ function renderFrame(frame) {
   }
 
   polyLayer.clearLayers();
-  if (frame?.polygons) polyLayer.addData(frame.polygons);
+
+  // Accept polygons from different keys, but still Railway-only
+  const geo = frame?.polygons || frame?.geojson || frame?.data || null;
+  if (geo) polyLayer.addData(geo);
 }
 
-async function goToIndex(i) {
-  const idx = clamp(Number(i || 0), 0, timeline.length - 1);
+async function goToIndex(i){
+  const idx = clamp(Number(i||0), 0, timeline.length - 1);
   slider.value = String(idx);
 
   const frame = await loadFrame(idx);
@@ -290,7 +279,6 @@ slider.addEventListener("input", () => {
     slider._raf = null;
     try {
       await goToIndex(pending);
-      setStatus(`Loaded ${timeline.length} steps`);
     } catch (e) {
       console.error(e);
       setStatus("Load failed (frame)");
@@ -303,7 +291,6 @@ btnNow?.addEventListener("click", async () => {
   try {
     const idx = pickIndexClosestToNow();
     await goToIndex(idx);
-    setStatus(`Loaded ${timeline.length} steps`);
   } catch (e) {
     console.error(e);
     setStatus("Load failed (Now)");
@@ -311,17 +298,16 @@ btnNow?.addEventListener("click", async () => {
 });
 
 btnGenerate?.addEventListener("click", async () => {
-  if (!BASE) {
+  if (!BASE){
     alert("Missing window.RAILWAY_BASE_URL in index.html");
     return;
   }
   try {
     setStatus("Generating…");
 
-    // Keep your params, still Railway-only:
     const res = await apiPOST("/generate?bin_minutes=20&good_n=200&bad_n=120&win_good_n=80&win_bad_n=40&min_trips_per_window=10&simplify_meters=25");
-    if (!res.ok) {
-      const txt = await res.text().catch(() => "");
+    if (!res.ok){
+      const txt = await res.text().catch(()=> "");
       throw new Error(`Generate failed (${res.status}) ${txt}`);
     }
 
@@ -333,8 +319,8 @@ btnGenerate?.addEventListener("click", async () => {
   }
 });
 
-async function boot() {
-  if (!BASE) {
+async function boot(){
+  if (!BASE){
     setStatus("Load failed");
     timeLabel.textContent = "ERROR: Missing Railway base URL";
     return;
@@ -344,7 +330,7 @@ async function boot() {
     setStatus("Loading…");
     await loadTimeline();
 
-    if (!timeline.length) {
+    if (!timeline.length){
       setStatus("No timeline");
       timeLabel.textContent = "No timeline data";
       return;
@@ -352,10 +338,10 @@ async function boot() {
 
     setSliderBounds();
 
-    // ✅ Start at closest NYC time-of-week bucket (week wrap)
+    // ✅ start slider at current NYC window (closest, with wrap)
     const idx = pickIndexClosestToNow();
-    await goToIndex(idx);
     setStatus(`Loaded ${timeline.length} steps`);
+    await goToIndex(idx);
   } catch (e) {
     console.error(e);
     setStatus("Load failed (timeline)");
