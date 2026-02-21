@@ -118,14 +118,14 @@ function getFeatureRating(properties){
 
 function buildPolygonStyle(feature){
   const p = feature?.properties || {};
-  const backendFill = p?.style?.fillColor;
   const rating = getFeatureRating(p);
   const { fill, op } = ratingToColor(rating);
 
   return {
     color: "#1b1b1b",
     weight: 2,
-    fillColor: backendFill || fill,
+    // Always use the frontend rating palette so map colors match the legend.
+    fillColor: fill,
     fillOpacity: op
   };
 }
