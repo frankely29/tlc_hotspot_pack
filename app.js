@@ -26,21 +26,21 @@ function formatTimeLabel(iso){
 // 30+ minutes: red
 function waitTimeToColor(waitMinutes){
   const w = Number(waitMinutes);
-  if (!Number.isFinite(w)) return { fill:"#9b9b9b", op:0.28 };
+  if (!Number.isFinite(w)) return { fill:"#8f8f8f", op:0.45 };
 
   if (w < 10){
-    return { fill:"#00b050", op:0.50 };
+    return { fill:"#00d66b", op:0.72 };
   }
 
   if (w < 20){
-    return { fill:"#ffd700", op:0.38 };
+    return { fill:"#ffcc00", op:0.66 };
   }
 
   if (w < 30){
-    return { fill:"#9b9b9b", op:0.28 };
+    return { fill:"#6f6f6f", op:0.58 };
   }
 
-  return { fill:"#d60000", op:0.24 };
+  return { fill:"#ff2a2a", op:0.66 };
 }
 
 const RAILWAY_BASE_URL = (window.RAILWAY_BASE_URL || "").replace(/\/+$/,"");
