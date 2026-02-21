@@ -1,7 +1,7 @@
 // =======================
 // TLC Hotspot Map - app.js (NO ICONS)
 // - Loads data from Railway /hotspots (with /download fallback)
-// - Colors polygons with 3 bands (Green good, Blue medium, Red very bad)
+// - Colors polygons with 4 bands (Green best, Blue medium, Sky blue normal, Red avoid)
 // - Clear error messages if anything fails
 // - Slider throttled for iPhone
 // =======================
@@ -89,32 +89,15 @@ function rgbToHex(r, g, b){
 }
 
 // Rating color scale (1..100):
-// Green (good) -> Blue (medium) -> Red (very bad)
+// Green (best) -> Blue (medium) -> Sky blue (normal) -> Red (avoid)
 function ratingToColor(rating){
   const r = Number(rating);
-  if (!Number.isFinite(r)) return { fill:"#3b82f6", op:0.5 };
+  if (!Number.isFinite(r)) return { fill:"#38bdf8", op:0.5 };
 
-  const t = clamp((r - 1) / 99, 0, 1);
-
-  // low ratings: red -> blue, high ratings: blue -> green
-  let rgb;
-  if (t <= 0.5){
-    const k = t / 0.5;
-    rgb = {
-      r: lerp(229, 59, k),
-      g: lerp(57, 130, k),
-      b: lerp(53, 246, k)
-    };
-  } else {
-    const k = (t - 0.5) / 0.5;
-    rgb = {
-      r: lerp(59, 0, k),
-      g: lerp(130, 214, k),
-      b: lerp(246, 107, k)
-    };
-  }
-
-  return { fill: rgbToHex(rgb.r, rgb.g, rgb.b), op: 0.68 };
+  if (r >= 75) return { fill: "#00d66b", op: 0.68 }; // best trip request
+  if (r >= 50) return { fill: "#2563eb", op: 0.68 }; // medium trip request
+  if (r >= 25) return { fill: "#38bdf8", op: 0.68 }; // normal trip request
+  return { fill: "#e53935", op: 0.68 }; // lowest trip request (avoid)
 }
 
 function getFeatureRating(properties){
