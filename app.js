@@ -8,39 +8,49 @@
 
 function clamp(x, a, b){ return Math.max(a, Math.min(b, x)); }
 
-function getNycMinutesOfDay(dateLike){
+const NYC_WEEKDAY_INDEX = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6
+};
+
+function getNycWeekMinute(dateLike){
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
+    weekday: "short",
     hour12: false,
     hour: "2-digit",
     minute: "2-digit"
   }).formatToParts(new Date(dateLike));
 
+  const weekday = parts.find(p => p.type === "weekday")?.value;
   const hour = Number(parts.find(p => p.type === "hour")?.value ?? 0);
   const minute = Number(parts.find(p => p.type === "minute")?.value ?? 0);
-  return (hour * 60) + minute;
-}
+  const dayIndex = NYC_WEEKDAY_INDEX[weekday] ?? 0;
 
-function minutesDistanceOnClock(a, b){
-  const day = 24 * 60;
-  const diff = Math.abs(a - b);
-  return Math.min(diff, day - diff);
+  return (dayIndex * 24 * 60) + (hour * 60) + minute;
 }
 
 function getTimelineIndexNearestNow(){
   if (!timeline.length) return 0;
 
-  const nowNycMinutes = getNycMinutesOfDay(Date.now());
+  const week = 7 * 24 * 60;
+  const nowNycWeekMinute = getNycWeekMinute(Date.now());
   let bestIdx = 0;
   let bestDiff = Number.POSITIVE_INFINITY;
 
   for (let i = 0; i < timeline.length; i += 1){
     const t = new Date(timeline[i]);
     if (!Number.isFinite(t.getTime())) continue;
-    const frameNycMinutes = getNycMinutesOfDay(t);
-    const diff = minutesDistanceOnClock(frameNycMinutes, nowNycMinutes);
-    if (diff < bestDiff){
-      bestDiff = diff;
+    const frameNycWeekMinute = getNycWeekMinute(t);
+    const diff = Math.abs(frameNycWeekMinute - nowNycWeekMinute);
+    const wrappedDiff = Math.min(diff, week - diff);
+    if (wrappedDiff < bestDiff){
+      bestDiff = wrappedDiff;
       bestIdx = i;
     }
   }
