@@ -12,112 +12,40 @@
     html, body { height: 100%; margin: 0; }
     #map { height: 100%; width: 100%; }
 
-    /* Small, non-blocking legend */
-    .panel {
-      position: fixed;
-      top: 10px;
-      left: 10px;
-      z-index: 9999;
-      background: rgba(255,255,255,0.92);
+    .panel{
+      position: fixed; top: 10px; left: 10px; z-index: 9999;
+      background: rgba(255,255,255,0.94);
+      border: 2px solid #111; border-radius: 10px;
       padding: 8px 10px;
-      border: 2px solid #111;
-      border-radius: 10px;
       font-family: Arial, sans-serif;
-      font-size: 12px;
-      max-width: 260px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.18);
-      backdrop-filter: blur(2px);
+      box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+      max-width: 320px;
     }
+    .title{ font-weight: 900; font-size: 14px; margin-bottom: 6px; }
+    .legendRow{ display:flex; gap:10px; flex-wrap: wrap; align-items:center; margin: 6px 0; }
+    .dot{ width:10px; height:10px; border-radius: 50%; display:inline-block; margin-right:6px; }
+    .small{ font-size: 12px; color:#333; line-height: 1.25; }
 
-    .panel h1 {
-      margin: 0 0 6px 0;
-      font-size: 13px;
-      font-weight: 900;
-    }
-
-    .bar {
-      height: 10px;
-      width: 100%;
-      border: 1px solid #333;
-      border-radius: 6px;
-      margin: 6px 0 6px 0;
-      background: linear-gradient(90deg,
-        #e53935 0%,
-        #81d4fa 33%,
-        #1e88e5 66%,
-        #43a047 100%
-      );
-    }
-
-    .legendRow {
-      display: grid;
-      grid-template-columns: auto 1fr;
-      gap: 6px 10px;
-      align-items: center;
-      margin-top: 4px;
-    }
-
-    .dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      display: inline-block;
-      border: 1px solid rgba(0,0,0,0.25);
-    }
-
-    .small {
-      margin-top: 6px;
-      color: #333;
-      line-height: 1.25;
-      font-size: 11px;
-    }
-
-    .statusLine {
-      margin-top: 6px;
-      font-size: 11px;
-      font-weight: 800;
-    }
-
-    .btnRow {
-      display: flex;
-      gap: 8px;
-      margin-top: 8px;
-      align-items: center;
-    }
-
-    button {
-      font-size: 12px;
-      font-weight: 800;
-      padding: 6px 10px;
-      border: 2px solid #111;
-      border-radius: 10px;
-      background: #fff;
-    }
-
-    /* Bottom slider */
-    .sliderWrap {
-      position: fixed;
-      left: 10px;
-      right: 10px;
-      bottom: 12px;
-      z-index: 9999;
-      background: rgba(255,255,255,0.92);
-      border: 2px solid #111;
-      border-radius: 10px;
-      padding: 10px 10px;
+    .sliderWrap{
+      position: fixed; left: 10px; right: 10px; bottom: 12px; z-index: 9999;
+      background: rgba(255,255,255,0.94);
+      border: 2px solid #111; border-radius: 10px;
+      padding: 10px 12px;
       font-family: Arial, sans-serif;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.18);
-      backdrop-filter: blur(2px);
+      box-shadow: 0 2px 10px rgba(0,0,0,0.25);
     }
-
-    input[type="range"] { width: 100%; }
-    .timeLabel { font-weight: 900; font-size: 16px; }
-    .subLabel { margin-top: 2px; color:#444; font-size: 11px; }
+    .timeLabel{ font-weight: 900; margin-bottom: 6px; }
+    #statusText{ font-size: 12px; color:#444; margin-top: 4px; }
+    input[type="range"]{ width: 100%; }
+    .btnRow{ margin-top: 6px; display:flex; gap:8px; }
+    button{
+      border:2px solid #111; background:#fff; padding:6px 10px;
+      border-radius: 10px; font-weight: 900;
+    }
   </style>
 
   <script>
-    // ✅ IMPORTANT: Set your Railway base URL here (NO trailing slash)
-    // Example: https://web-production-78f67.up.railway.app
+    // ✅ REQUIRED: set this to your Railway domain (no trailing slash)
     window.RAILWAY_BASE_URL = "https://web-production-78f67.up.railway.app";
   </script>
 </head>
@@ -126,33 +54,30 @@
   <div id="map"></div>
 
   <div class="panel">
-    <h1>NYC HVFHV Zones (1–100)</h1>
-
-    <div class="bar" title="Red → Sky → Blue → Green"></div>
+    <div class="title">NYC HVFHV Zones (1–100)</div>
 
     <div class="legendRow">
-      <span class="dot" style="background:#43a047;"></span><span><b>Green</b> = Best</span>
-      <span class="dot" style="background:#1e88e5;"></span><span><b>Blue</b> = Medium</span>
-      <span class="dot" style="background:#81d4fa;"></span><span><b>Sky</b> = Normal</span>
-      <span class="dot" style="background:#e53935;"></span><span><b>Red</b> = Avoid</span>
+      <span><span class="dot" style="background:#2e7d32;"></span><b>Green</b> = Best</span>
+      <span><span class="dot" style="background:#1976d2;"></span><b>Blue</b> = Medium</span>
+      <span><span class="dot" style="background:#81d4fa;"></span><b>Sky</b> = Normal</span>
+      <span><span class="dot" style="background:#d32f2f;"></span><b>Red</b> = Avoid</span>
     </div>
 
     <div class="small">
-      • Colors come from <b>rating (1–100)</b> for the selected 20-minute window.<br>
-      • No checkmarks / X icons (removed).
+      • Colors come from <b>rating (1–100)</b> for the selected <b>20-minute window</b>.<br>
+      • Data loads from <b>Railway only</b>.
     </div>
 
     <div class="btnRow">
-      <button id="btnGenerate" type="button">Generate on Railway</button>
-      <button id="btnReload" type="button">Reload</button>
+      <button id="btnNow" type="button">Now (NYC)</button>
+      <button id="btnGenerate" type="button">Generate</button>
     </div>
 
-    <div class="statusLine" id="statusText">Loading…</div>
+    <div id="statusText">Loading…</div>
   </div>
 
   <div class="sliderWrap">
     <div class="timeLabel" id="timeLabel">Loading…</div>
-    <div class="subLabel" id="subLabel">NYC time</div>
     <input id="slider" type="range" min="0" max="0" step="1" value="0" />
   </div>
 
