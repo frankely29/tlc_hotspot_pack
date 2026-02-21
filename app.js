@@ -1,7 +1,7 @@
 // =======================
-// TLC Hotspot Map - app.js (NO ICONS)
+// TLC Hotspot Map - app.js
 // - Loads data from Railway /hotspots (with /download fallback)
-// - Colors polygons by wait time (Green→Yellow→Gray→Red)
+// - Uses rating/style fields from Railway payload for polygon colors
 // - Clear error messages if anything fails
 // - Slider throttled for iPhone
 // =======================
@@ -19,28 +19,32 @@ function formatTimeLabel(iso){
   });
 }
 
-// Wait-time color scale:
-// 1-10 minutes: green
-// 10-20 minutes: yellow
-// 20-30 minutes: gray
-// 30+ minutes: red
-function waitTimeToColor(waitMinutes){
-  const w = Number(waitMinutes);
-  if (!Number.isFinite(w)) return { fill:"#9b9b9b", op:0.28 };
+// Rating color scale (1=red ... 100=green)
+function ratingToColor(rating){
+  const r = Number(rating);
+  if (!Number.isFinite(r)) return { fill:"#9b9b9b", op:0.28 };
 
-  if (w < 10){
-    return { fill:"#00b050", op:0.50 };
+  const t = clamp((r - 1) / 99, 0, 1);
+
+  // red -> yellow -> green
+  let red;
+  let green;
+  let blue;
+
+  if (t <= 0.5){
+    const k = t / 0.5;
+    red = Math.round(230 + (255 - 230) * k);
+    green = Math.round(0 + (215 - 0) * k);
+    blue = 0;
+  } else {
+    const k = (t - 0.5) / 0.5;
+    red = Math.round(255 + (0 - 255) * k);
+    green = Math.round(215 + (176 - 215) * k);
+    blue = Math.round(0 + (80 - 0) * k);
   }
 
-  if (w < 20){
-    return { fill:"#ffd700", op:0.38 };
-  }
-
-  if (w < 30){
-    return { fill:"#9b9b9b", op:0.28 };
-  }
-
-  return { fill:"#d60000", op:0.24 };
+  const fill = `#${red.toString(16).padStart(2, "0")}${green.toString(16).padStart(2, "0")}${blue.toString(16).padStart(2, "0")}`;
+  return { fill, op:0.55 };
 }
 
 const RAILWAY_BASE_URL = (window.RAILWAY_BASE_URL || "").replace(/\/+$/,"");
@@ -59,24 +63,15 @@ const polyLayer = L.geoJSON(null, {
   style: (feature) => {
     const p = feature?.properties || {};
 
-    const waitMinutes = p.wait_minutes ?? p.wait_time_minutes ?? p.wait_time ?? p.wait ?? null;
-
-    const { fill, op } = waitTimeToColor(waitMinutes);
-
-    // If builder provided fillColor, use it ONLY if wait-time fields are missing
-    const finalFill = (waitMinutes === null || waitMinutes === undefined)
-      ? (p.style?.fillColor || fill)
-      : fill;
-
-    const finalOp = (waitMinutes === null || waitMinutes === undefined)
-      ? (p.style?.fillOpacity ?? op)
-      : op;
+    // Railway payload includes style.fillColor + rating.
+    const fallback = ratingToColor(p.rating);
 
     return {
-      color: "#1b1b1b",
-      weight: 2,
-      fillColor: finalFill,
-      fillOpacity: finalOp
+      color: p.style?.color || "#1b1b1b",
+      weight: p.style?.weight ?? 2,
+      dashArray: p.style?.dashArray ?? null,
+      fillColor: p.style?.fillColor || fallback.fill,
+      fillOpacity: p.style?.fillOpacity ?? fallback.op
     };
   },
   onEachFeature: (feature, layer) => {
@@ -85,13 +80,15 @@ const polyLayer = L.geoJSON(null, {
       layer.bindPopup(p.popup, { maxWidth: 360 });
     } else {
       // safe fallback popup
-      const waitMinutes = p.wait_minutes ?? p.wait_time_minutes ?? p.wait_time ?? p.wait ?? "n/a";
+      const rating = p.rating ?? "n/a";
       const pickups = p.pickups ?? "n/a";
+      const tag = p.tag || "n/a";
       layer.bindPopup(
         `<div style="font-family:Arial;font-size:13px;">
           <div style="font-weight:900;">Zone</div>
-          <div><b>Wait time:</b> ${waitMinutes} min</div>
+          <div><b>Rating:</b> ${rating}/100</div>
           <div><b>Pickups:</b> ${pickups}</div>
+          <div><b>Tag:</b> ${tag}</div>
         </div>`,
         { maxWidth: 320 }
       );
@@ -161,7 +158,19 @@ async function fetchHotspots(){
     throw new Error("Data format missing timeline/frames (JSON shape changed).");
   }
 
-  setStatus(true, `Loaded ${timeline.length} steps from Railway ✅`);
+  const firstTime = timeline[0];
+  const firstFrame = dataByTime.get(firstTime);
+  const firstFeatures = firstFrame?.polygons?.features?.length ?? 0;
+  const binMinutes = payload?.meta?.bin_minutes;
+
+  if (!firstFeatures){
+    throw new Error("Railway data loaded, but first frame has no polygons.");
+  }
+
+  setStatus(
+    true,
+    `Loaded ${timeline.length} steps (${firstFeatures} zones in first frame${binMinutes ? `, ${binMinutes}m bins` : ""}) from Railway ✅`
+  );
 }
 
 function setupSlider(){
