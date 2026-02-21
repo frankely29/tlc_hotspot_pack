@@ -98,6 +98,40 @@ function ratingToColor(rating){
   return { fill:"#e53935", op:0.66 };
 }
 
+function getFeatureRating(properties){
+  const p = properties || {};
+
+  const directRating = p.rating ?? p.rating_1_100 ?? p.rating_overall_1_100;
+  if (directRating !== null && directRating !== undefined && Number.isFinite(Number(directRating))){
+    return Number(directRating);
+  }
+
+  const score01 = p.score01 ?? p.score_01;
+  if (score01 !== null && score01 !== undefined && Number.isFinite(Number(score01))){
+    return clamp(Number(score01) * 100, 1, 100);
+  }
+
+  const waitMinutes = p.wait_minutes ?? p.wait_time_minutes ?? p.wait_time ?? p.wait;
+  if (waitMinutes !== null && waitMinutes !== undefined && Number.isFinite(Number(waitMinutes))){
+    return Number(waitMinutes);
+  }
+
+  return null;
+}
+
+function buildPolygonStyle(feature){
+  const p = feature?.properties || {};
+  const rating = getFeatureRating(p);
+  const { fill, op } = ratingToColor(rating);
+
+  return {
+    color: "#1b1b1b",
+    weight: 2,
+    fillColor: fill,
+    fillOpacity: op
+  };
+}
+
 const RAILWAY_BASE_URL = (window.RAILWAY_BASE_URL || "").replace(/\/+$/,"");
 
 const map = L.map('map', { zoomControl: true }).setView([40.72, -73.98], 12);
@@ -111,29 +145,15 @@ map.getPane("polys").style.zIndex = 400;
 
 const polyLayer = L.geoJSON(null, {
   pane: "polys",
-  style: (feature) => {
-    const p = feature?.properties || {};
-
-    const rating = p.rating ?? null;
-    const waitMinutes = p.wait_minutes ?? p.wait_time_minutes ?? p.wait_time ?? p.wait ?? null;
-
-    const { fill, op } = rating !== null && rating !== undefined
-      ? ratingToColor(rating)
-      : ratingToColor(waitMinutes);
-
-    // Enforce app-side three-color scheme
-    const finalFill = fill;
-    const finalOp = op;
-
-    return {
-      color: "#1b1b1b",
-      weight: 2,
-      fillColor: finalFill,
-      fillOpacity: finalOp
-    };
-  },
+  style: buildPolygonStyle,
   onEachFeature: (feature, layer) => {
     const p = feature?.properties || {};
+
+    // Re-apply style per layer so backend-provided style hints can't override app colors.
+    if (layer && typeof layer.setStyle === "function"){
+      layer.setStyle(buildPolygonStyle(feature));
+    }
+
     if (p.popup){
       layer.bindPopup(p.popup, { maxWidth: 360 });
     } else {
