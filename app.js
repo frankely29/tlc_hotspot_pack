@@ -49,10 +49,10 @@ function getNYCParts(date = new Date()){
   };
 }
 
-function timelineMinuteOfWeek(iso){
+function timelineMinuteOfWeekNYC(iso){
   const d = new Date(iso);
-  const dow = (d.getUTCDay() + 6) % 7; // Mon=0..Sun=6
-  return dow * 1440 + d.getUTCHours() * 60 + d.getUTCMinutes();
+  const parts = getNYCParts(d);
+  return parts.dow * 1440 + parts.minuteOfDay;
 }
 
 function addMinutesISO(iso, minutes){
@@ -187,7 +187,7 @@ function pickIndexClosestToNow(){
   const weekMinutes = 7 * 24 * 60;
 
   for (let i=0; i<timeline.length; i++){
-    const tMinuteOfWeek = timelineMinuteOfWeek(timeline[i]);
+    const tMinuteOfWeek = timelineMinuteOfWeekNYC(timeline[i]);
     const directDiff = Math.abs(tMinuteOfWeek - nowMinuteOfWeek);
     const wrapDiff = weekMinutes - directDiff;
     const diff = Math.min(directDiff, wrapDiff);
@@ -254,7 +254,7 @@ slider.addEventListener("input", () => {
       await goToIndex(pending);
     } catch (e) {
       console.error(e);
-      setStatus("Load failed ✖");
+      setStatus("Load failed");
       timeLabel.textContent = "Load failed";
     }
   });
@@ -266,7 +266,7 @@ btnNow?.addEventListener("click", async () => {
     await goToIndex(idx);
   } catch (e) {
     console.error(e);
-    setStatus("Load failed ✖");
+    setStatus("Load failed");
   }
 });
 
@@ -284,14 +284,14 @@ btnGenerate?.addEventListener("click", async () => {
     await boot();
   } catch (e) {
     console.error(e);
-    setStatus("Generate failed ✖");
+    setStatus("Generate failed");
     alert(String(e.message || e));
   }
 });
 
 async function boot(){
   if (!BASE){
-    setStatus("Load failed ✖");
+    setStatus("Load failed");
     timeLabel.textContent = "ERROR: Missing Railway base URL";
     return;
   }
@@ -301,7 +301,7 @@ async function boot(){
     await loadTimeline();
 
     if (!timeline.length){
-      setStatus("No timeline ✖");
+      setStatus("No timeline");
       timeLabel.textContent = "No timeline data";
       return;
     }
@@ -310,11 +310,11 @@ async function boot(){
 
     // ✅ start slider at current time window (closest)
     const idx = pickIndexClosestToNow();
-    setStatus(`Loaded ${timeline.length} steps ✓`);
+    setStatus(`Loaded ${timeline.length} steps`);
     await goToIndex(idx);
   } catch (e) {
     console.error(e);
-    setStatus("Load failed ✖");
+    setStatus("Load failed");
     timeLabel.textContent = "Load failed";
   }
 }
