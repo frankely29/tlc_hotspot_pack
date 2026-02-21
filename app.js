@@ -1,7 +1,7 @@
 // =======================
 // TLC Hotspot Map - app.js (NO ICONS)
 // - Loads data from Railway /hotspots (with /download fallback)
-// - Colors polygons by rating 1–100 (Gray→Red→Yellow→Green)
+// - Colors polygons by rating 1–100 (Red→Gray→Yellow→Green)
 // - Clear error messages if anything fails
 // - Slider throttled for iPhone
 // =======================
@@ -19,42 +19,35 @@ function formatTimeLabel(iso){
   });
 }
 
-// Continuous “more detailed” gradient with a Gray floor for very low.
+// Requested meaning for highlighted zones:
+// - Red: very low calls / long waits
+// - Gray: low activity (better than red)
+// - Yellow: good
+// - Green: best / busy
 // rating 1..100
 function ratingToColor(rating){
   const r = Number(rating);
-  if (!Number.isFinite(r)) return { fill:"#9b9b9b", op:0.18 };
+  if (!Number.isFinite(r)) return { fill:"#9b9b9b", op:0.28 };
 
   const v = clamp(r, 1, 100);
 
-  // 1..12 = gray (very low)
-  if (v <= 12){
-    return { fill:"#9b9b9b", op:0.18 };
+  // 1..20 = red (worst)
+  if (v <= 20){
+    return { fill:"#d60000", op:0.24 };
   }
 
-  // 13..100 mapped into red->yellow->green
-  const t = (v - 13) / (100 - 13); // 0..1
-
-  let R,G,B;
-
-  // red -> yellow (0..0.5), yellow -> green (0.5..1)
-  if (t <= 0.5){
-    const k = t / 0.5;
-    // red (214,0,0) to yellow (255,215,0)
-    R = Math.round(214 + (255-214)*k);
-    G = Math.round(0   + (215-0)*k);
-    B = 0;
-  } else {
-    const k = (t - 0.5) / 0.5;
-    // yellow (255,215,0) to green (0,176,80)
-    R = Math.round(255 + (0-255)*k);
-    G = Math.round(215 + (176-215)*k);
-    B = Math.round(0   + (80-0)*k);
+  // 21..40 = gray (still low, but better than red)
+  if (v <= 40){
+    return { fill:"#9b9b9b", op:0.28 };
   }
 
-  // Slightly stronger opacity for higher ratings so “good areas” pop more
-  const op = 0.22 + (t * 0.28); // 0.22..0.50
-  return { fill:`rgb(${R},${G},${B})`, op };
+  // 41..70 = yellow (good)
+  if (v <= 70){
+    return { fill:"#ffd700", op:0.38 };
+  }
+
+  // 71..100 = green (best / busy)
+  return { fill:"#00b050", op:0.50 };
 }
 
 const RAILWAY_BASE_URL = (window.RAILWAY_BASE_URL || "").replace(/\/+$/,"");
