@@ -12,7 +12,6 @@
     html, body { height: 100%; margin: 0; }
     #map { height: 100%; width: 100%; }
 
-    /* Small legend box (top-left) */
     .panel {
       position: fixed; top: 10px; left: 10px; z-index: 9999;
       background: rgba(255,255,255,0.93);
@@ -27,7 +26,6 @@
     .legendRow { display:flex; align-items:center; gap:6px; margin: 3px 0; }
     .sw { width: 12px; height: 12px; border-radius: 3px; border: 1px solid #222; }
 
-    /* Slider bottom */
     .sliderWrap {
       position: fixed; left: 10px; right: 10px; bottom: 12px; z-index: 9999;
       background: rgba(255,255,255,0.93);
@@ -63,10 +61,11 @@
   </div>
 
   <script>
-    // CHANGE THIS to your Railway backend domain:
+    // ✅ PUT YOUR RAILWAY URL HERE (no trailing slash)
     window.RAILWAY_BASE_URL = "https://web-production-78f67.up.railway.app";
   </script>
 
-  <script src="./app.js"></script>
+  <!-- ✅ Cache-bust so iPhone Safari loads new app.js -->
+  <script src="./app.js?v=20260221_1"></script>
 </body>
 </html>
