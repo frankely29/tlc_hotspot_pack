@@ -13,90 +13,73 @@
     #map { height: 100%; width: 100%; }
 
     .panel {
-      position: fixed;
-      top: 10px;
-      left: 10px;
-      z-index: 9999;
-      background: rgba(255,255,255,0.95);
+      position: fixed; top: 10px; left: 10px; z-index: 9999;
+      background: rgba(255,255,255,0.92);
       padding: 8px 10px;
-      border: 2px solid #111;
-      border-radius: 10px;
-      font-family: Arial, sans-serif;
-      font-size: 12px;
+      border: 2px solid #111; border-radius: 10px;
+      font-family: Arial, sans-serif; font-size: 12px;
       max-width: 280px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+      box-shadow: 0 2px 10px rgba(0,0,0,0.18);
     }
-
-    .legendRow { display:flex; align-items:center; gap:8px; flex-wrap: wrap; margin-top:6px; }
+    .legendRow { display:flex; align-items:center; gap:8px; margin-top:6px; flex-wrap:wrap; }
     .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
-    .btnRow { display:flex; gap:8px; margin-top:8px; }
-    button {
-      border: 2px solid #111;
-      background: #fff;
-      border-radius: 10px;
-      padding: 6px 10px;
-      font-weight: 700;
-      cursor: pointer;
-    }
-
-    .status { margin-top:6px; font-weight:700; }
+    .small { font-size: 11px; color:#333; line-height:1.25; margin-top:6px; }
 
     .sliderWrap {
-      position: fixed;
-      left: 10px;
-      right: 10px;
-      bottom: 12px;
-      z-index: 9999;
-      background: rgba(255,255,255,0.95);
-      border: 2px solid #111;
-      border-radius: 10px;
+      position: fixed; left: 10px; right: 10px; bottom: 12px; z-index: 9999;
+      background: rgba(255,255,255,0.92);
+      border: 2px solid #111; border-radius: 10px;
       padding: 10px 12px;
       font-family: Arial, sans-serif;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+      box-shadow: 0 2px 10px rgba(0,0,0,0.18);
     }
     input[type="range"] { width: 100%; }
-    .timeLabel { font-weight: 900; font-size: 16px; }
-    .subLabel { font-size: 12px; color:#333; margin-top:2px; }
+    .timeLabel { font-weight: 900; font-size: 18px; }
+    .sub { font-size: 12px; color:#444; margin-top:4px; }
+    .status { font-size: 12px; margin-top:6px; color:#0a6; font-weight:700; }
+    .status.bad { color:#a00; }
+    button {
+      border:2px solid #111; border-radius:10px;
+      padding:6px 10px; background:#fff; font-weight:800;
+    }
   </style>
 
   <script>
-    // IMPORTANT: Railway base URL (Railway-only data)
+    // IMPORTANT: Put your Railway URL here
     window.RAILWAY_BASE_URL = "https://web-production-78f67.up.railway.app";
   </script>
 </head>
-
 <body>
   <div id="map"></div>
 
   <div class="panel">
-    <div style="font-weight:900; font-size:14px;">
-      NYC HVFHV Zones (1–100)
-    </div>
+    <div style="font-weight:900; font-size:14px;">NYC HVFHV Zones (1–100)</div>
 
     <div class="legendRow">
-      <span class="dot" style="background:#1db954;"></span><span><b>Green</b> = Best</span>
-      <span class="dot" style="background:#1f6feb;"></span><span><b>Blue</b> = Medium</span>
-      <span class="dot" style="background:#7dd3fc;"></span><span><b>Sky</b> = Normal</span>
-      <span class="dot" style="background:#ef4444;"></span><span><b>Red</b> = Avoid</span>
+      <span class="dot" style="background:#00b050;"></span><span><b>Green</b> = Best</span>
+      <span class="dot" style="background:#1f5cff;"></span><span><b>Blue</b> = Medium</span>
+      <span class="dot" style="background:#66ccff;"></span><span><b>Sky</b> = Normal</span>
+      <span class="dot" style="background:#e60000;"></span><span><b>Red</b> = Avoid</span>
     </div>
 
-    <div style="margin-top:6px; color:#333; line-height:1.3;">
-      • Colors come from <b>rating (1–100)</b> for the selected 20-minute window.<br>
-      • Data loads from <b>Railway only</b>.
+    <div class="small">
+      • Colors come from <b>rating (1–100)</b> for selected 20-min window.<br>
+      • Data comes from <b>Railway only</b>.
     </div>
 
-    <div class="btnRow">
+    <div style="margin-top:8px; display:flex; gap:8px;">
       <button id="btnGenerate">Generate</button>
       <button id="btnReload">Reload</button>
     </div>
 
-    <div class="status" id="statusText">Loading…</div>
+    <div id="topStatus" class="status bad">Loading…</div>
   </div>
 
   <div class="sliderWrap">
     <div class="timeLabel" id="timeLabel">Loading…</div>
-    <div class="subLabel">NYC time</div>
+    <div class="sub">NYC time</div>
     <input id="slider" type="range" min="0" max="0" step="1" value="0" />
+    <div id="err" class="status bad" style="display:none;"></div>
   </div>
 
   <script src="./app.js"></script>
