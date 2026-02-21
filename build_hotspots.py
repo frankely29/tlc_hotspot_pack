@@ -210,6 +210,14 @@ def build_hotspots_json(
 
     df_total, df_win = build_metrics(parquet_files, bin_minutes=bin_minutes)
 
+    # Keep only official TLC taxi zones to avoid out-of-range IDs skewing scores.
+    # Some parquet batches can contain synthetic/unknown location IDs (e.g. 264/265),
+    # which are not present in the zone geometry and can force most real zones toward
+    # low min-max values (appearing overly red).
+    valid_zone_ids = set(zones_gdf["LocationID"].astype(int).tolist())
+    df_total = df_total[df_total["PULocationID"].astype(int).isin(valid_zone_ids)].copy()
+    df_win = df_win[df_win["PULocationID"].astype(int).isin(valid_zone_ids)].copy()
+
     # overall good/bad selection pool by total pickups
     df_total = df_total.sort_values("pickups_total", ascending=False).copy()
     good_ids = df_total.head(int(good_n))["PULocationID"].astype(int).tolist()
