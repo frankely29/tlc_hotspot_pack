@@ -13,19 +13,15 @@
     #map { height: 100vh; width: 100vw; }
     #ui {
       position: absolute; top: 10px; left: 10px; z-index: 1000;
-      background: white; padding: 12px; border-radius: 10px;
-      box-shadow: 0 2px 15px rgba(0,0,0,0.3); max-width: 340px;
+      background: white; padding: 14px; border-radius: 12px;
+      box-shadow: 0 3px 20px rgba(0,0,0,0.3); max-width: 350px;
       border: 2px solid #111;
     }
-    button { padding: 10px 14px; font-size: 15px; font-weight: bold; border: none; border-radius: 8px; margin: 5px 0; }
+    button { padding: 10px 16px; font-size: 15px; font-weight: bold; border: none; border-radius: 8px; margin: 6px 4px 6px 0; width: 48%; }
     #btnNow, #btnGenerate { background: #1976d2; color: white; }
-    #timeLabel { font-weight: 900; font-size: 18px; margin: 8px 0; }
-    #status { font-size: 13px; color: #333; }
-    #slider { width: 100%; margin-top: 8px; }
-    .legendBar {
-      height: 12px; border-radius: 6px; margin: 8px 0;
-      background: linear-gradient(to right, #2e7d32, #1976d2, #81d4fa, #d32f2f);
-    }
+    #timeLabel { font-weight: 900; font-size: 18px; margin: 10px 0 4px; }
+    #status { font-size: 13px; color: #333; line-height: 1.4; }
+    .legendBar { height: 14px; border-radius: 7px; margin: 10px 0; background: linear-gradient(to right, #2e7d32, #1976d2, #81d4fa, #d32f2f); }
   </style>
 </head>
 <body>
@@ -44,21 +40,19 @@
     <small>High rating → Low rating</small><br><br>
 
     <button id="btnNow">Now (NYC)</button>
-    <button id="btnGenerate">Generate</button>
+    <button id="btnGenerate">Generate / Refresh</button>
 
-    <div id="timeLabel">Loading…</div>
-    <div id="status">Loading from Railway…</div>
+    <div id="timeLabel">Loading NYC time…</div>
+    <div id="status">Checking Railway data…</div>
     <input type="range" id="slider" min="0" max="0" value="0" step="1"/>
   </div>
 
   <script>
-    // === YOUR RAILWAY URL (confirmed from your repo) ===
-    window.RAILWAY_BASE_URL = "https://web-production-78f67.up.railway.app";
-
-    const BASE = window.RAILWAY_BASE_URL.replace(/\/+$/, "");
+    // Your Railway URL (from your repo)
+    const BASE = "https://web-production-78f67.up.railway.app".replace(/\/+$/, "");
     const BIN_MINUTES = 20;
 
-    // Strict rating → color (MANDATORY – no changes)
+    // STRICT color buckets – no overrides allowed
     function ratingToColor(r) {
       r = Math.max(1, Math.min(100, Number(r) || 1));
       if (r <= 25) return "#d32f2f";   // Red = Avoid
@@ -73,16 +67,13 @@
     }).addTo(map);
 
     const polyLayer = L.geoJSON(null, {
-      style: f => {
-        const rating = f.properties?.rating || f.properties?.rating_1_100 || 50;
-        return {
-          stroke: true,
-          color: "#111",
-          weight: 1.5,
-          fillColor: ratingToColor(rating),
-          fillOpacity: 0.75
-        };
-      }
+      style: f => ({
+        stroke: true,
+        color: "#111",
+        weight: 1.5,
+        fillColor: ratingToColor(f.properties?.rating || 50),
+        fillOpacity: 0.78
+      })
     }).addTo(map);
 
     let timeline = [];
@@ -90,105 +81,93 @@
     const timeLabel = document.getElementById("timeLabel");
     const statusEl = document.getElementById("status");
 
-    function setStatus(msg) { statusEl.textContent = msg; }
+    function setStatus(msg) { statusEl.innerHTML = msg; }
 
     function nycTimeLabel(iso) {
       return new Date(iso).toLocaleString("en-US", {
         timeZone: "America/New_York",
-        weekday: "short",
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true
+        weekday: "short", hour: "numeric", minute: "2-digit", hour12: true
       });
     }
 
-    // NYC minute-of-week (Monday=0 … Sunday=6) with week wrap
     function getNYCMinuteOfWeek(iso) {
       const d = new Date(iso);
-      const opts = { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "numeric" };
-      const parts = new Intl.DateTimeFormat("en-US", opts).formatToParts(d);
-      const dowMap = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 };
-      const dow = dowMap[parts.find(p => p.type === "weekday").value] ?? 0;
-      const hour = parseInt(parts.find(p => p.type === "hour").value);
-      const min = parseInt(parts.find(p => p.type === "minute").value);
-      return dow * 1440 + hour * 60 + min;
+      const f = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "numeric" });
+      const p = f.formatToParts(d);
+      const dowMap = { Mon:0, Tue:1, Wed:2, Thu:3, Fri:4, Sat:5, Sun:6 };
+      const dow = dowMap[p.find(x=>x.type==="weekday").value] ?? 0;
+      const h = +p.find(x=>x.type==="hour").value;
+      const m = +p.find(x=>x.type==="minute").value;
+      return dow * 1440 + h * 60 + m;
     }
 
     function pickClosestIndex() {
       if (!timeline.length) return 0;
       const nowM = getNYCMinuteOfWeek(new Date());
-      let bestIdx = 0, bestDiff = Infinity;
       const week = 7 * 1440;
+      let best = 0, bestD = Infinity;
       for (let i = 0; i < timeline.length; i++) {
-        const tM = getNYCMinuteOfWeek(timeline[i]);
-        const diff = Math.min(Math.abs(tM - nowM), week - Math.abs(tM - nowM));
-        if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
+        const d = Math.min(Math.abs(getNYCMinuteOfWeek(timeline[i]) - nowM), week - Math.abs(getNYCMinuteOfWeek(timeline[i]) - nowM));
+        if (d < bestD) { bestD = d; best = i; }
       }
-      return bestIdx;
+      return best;
     }
 
     async function apiGET(path) {
-      const res = await fetch(`${BASE}${path}`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
+      const r = await fetch(`${BASE}${path}`, {cache:"no-store"});
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
     }
 
     async function loadFrame(idx) {
       const data = await apiGET(`/frame/${idx}`);
       polyLayer.clearLayers();
-      const geo = data.polygons || data.geojson || data;
-      if (geo) polyLayer.addData(geo);
-
-      const t = data.time || timeline[idx];
-      timeLabel.textContent = nycTimeLabel(t);
+      polyLayer.addData(data.polygons || data);
+      timeLabel.textContent = nycTimeLabel(data.time || timeline[idx]);
       setStatus(`Loaded ${timeline.length} steps from Railway ✅`);
     }
 
     async function boot() {
-      setStatus("Loading timeline from Railway…");
+      setStatus("Checking Railway volume…");
       try {
         const data = await apiGET("/timeline");
         timeline = Array.isArray(data) ? data : (data.timeline || []);
-        if (!timeline.length) throw new Error("No timeline");
+        
+        if (timeline.length === 0) throw new Error("empty");
 
         slider.max = timeline.length - 1;
         const startIdx = pickClosestIndex();
         slider.value = startIdx;
         await loadFrame(startIdx);
 
-        // Live mode – update every 60 seconds
-        setInterval(async () => {
+        // Live auto-update to current NYC time every 60 seconds
+        setInterval(() => {
           if (document.visibilityState === "visible") {
             const idx = pickClosestIndex();
             slider.value = idx;
-            await loadFrame(idx);
+            loadFrame(idx);
           }
         }, 60000);
 
       } catch (e) {
-        console.error(e);
-        setStatus("No data yet – click Generate (upload PARQUET files on Railway first)");
-        timeLabel.textContent = "Click Generate";
+        setStatus("No processed data yet.<br>Click <strong>Generate / Refresh</strong> to build map from your PARQUET files in Railway volume.");
       }
     }
 
-    slider.addEventListener("input", async () => {
-      await loadFrame(parseInt(slider.value));
-    });
-
-    document.getElementById("btnNow").onclick = async () => {
+    slider.addEventListener("input", () => loadFrame(+slider.value));
+    
+    document.getElementById("btnNow").onclick = () => {
       const idx = pickClosestIndex();
       slider.value = idx;
-      await loadFrame(idx);
+      loadFrame(idx);
     };
 
     document.getElementById("btnGenerate").onclick = async () => {
-      setStatus("Generating on Railway… (1–2 min)");
+      setStatus("Processing data on Railway… (1–2 min)");
       try {
-        await fetch(`${BASE}/generate?bin_minutes=20&good_n=200&bad_n=120&win_good_n=80&win_bad_n=40&min_trips_per_window=10&simplify_meters=25`, { method: "POST" });
-        setStatus("Generation started – waiting for Railway…");
-        // Auto-retry load after 90 seconds
-        setTimeout(boot, 90000);
+        await fetch(`${BASE}/generate?bin_minutes=20&good_n=200&bad_n=120&win_good_n=80&win_bad_n=40&min_trips_per_window=10&simplify_meters=25`, {method:"POST"});
+        setStatus("Generation started. Waiting for Railway…");
+        setTimeout(boot, 90000); // retry load after processing
       } catch (e) {
         setStatus("Generate failed – check Railway logs");
       }
