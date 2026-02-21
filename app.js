@@ -1,12 +1,9 @@
 // =======================
-// TLC Hotspot Map - app.js (GitHub Pages)
-// - Fetches data from Railway (/hotspots)
-// - Phone-friendly
-// - Clear meaning:
-//    * Polygon color = rating (Red->Yellow->Green)
-//    * Icons only for extreme zones (✅ very good, ✖ very low)
-//    * Purple pulse dot = "activity intensity" (higher rating => stronger purple)
-// - NYC timezone labels
+// TLC Hotspot Map - app.js (Phone-friendly)
+// Polygons = rating (red→yellow→green)
+// Icons = extremes only (Top ✓ / Bottom ✖ per time window)
+// Purple dots = intensity indicator (higher rating = more purple)
+// Data loads from Railway: GET {RAILWAY_BASE}/hotspots
 // =======================
 
 function clamp01(x){ return Math.max(0, Math.min(1, x)); }
@@ -35,7 +32,6 @@ function fmtMoney(x){
   return `$${Number(x).toFixed(2)}`;
 }
 
-// Force NYC timezone so labels match NYC time
 function formatTimeLabel(iso){
   const d = new Date(iso);
   return d.toLocaleString("en-US", {
@@ -46,199 +42,280 @@ function formatTimeLabel(iso){
   });
 }
 
-// --- Choose Railway base URL ---
-// You can override by adding: ?api=https://yourapp.up.railway.app
 function getApiBase(){
-  const u = new URL(window.location.href);
+  // Allow override: ?api=https://your-railway-domain
+  const u = new URL(location.href);
   const qp = u.searchParams.get("api");
   if (qp) return qp.replace(/\/+$/,"");
-  // default (your current Railway)
+  // Default (SET THIS to your Railway domain)
   return "https://web-production-78f67.up.railway.app";
 }
 
-const API_BASE = getApiBase();
+const RAILWAY_BASE = getApiBase();
 
+// Map
 const map = L.map('map', { zoomControl: true }).setView([40.72, -73.98], 12);
 L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
   attribution: '&copy; OpenStreetMap &copy; CARTO'
 }).addTo(map);
 
-// Panes so polygons never cover icons
+// Panes (polys below icons)
 map.createPane("polys");
 map.getPane("polys").style.zIndex = 400;
 
-map.createPane("pulses");
-map.getPane("pulses").style.zIndex = 520;
+map.createPane("dots");
+map.getPane("dots").style.zIndex = 520;
 
-map.createPane("markers");
-map.getPane("markers").style.zIndex = 650;
+map.createPane("icons");
+map.getPane("icons").style.zIndex = 650;
 
 // Layers
 const polyLayer = L.geoJSON(null, {
   pane: "polys",
-  style: (f) => {
-    const p = f?.properties || {};
-
-    // Prefer server-provided style if present
-    if (p.style) return p.style;
-
-    // Otherwise compute from rating/score
-    let rating = p.rating ?? p.rating_1_100;
-    let score01 = p.score01;
-    if (rating !== undefined && rating !== null) score01 = (Number(rating) - 1) / 99;
-
-    const fill = scoreToColorHex(score01 ?? 0);
-    return {
-      color: "#222", weight: 1,
-      fillColor: fill, fillOpacity: 0.55
-    };
-  },
+  style: (f) => (f && f.properties && f.properties.style) ? f.properties.style : {color:"#444", weight:1, fillOpacity:0.55},
   onEachFeature: (feature, layer) => {
     const p = feature.properties || {};
     if (p.popup) layer.bindPopup(p.popup, { maxWidth: 360 });
   }
 }).addTo(map);
 
-const pulseLayer = L.layerGroup([], { pane: "pulses" }).addTo(map);
-const markerLayer = L.layerGroup([], { pane: "markers" }).addTo(map);
+const dotLayer = L.layerGroup().addTo(map);
+const iconLayer = L.layerGroup().addTo(map);
 
 let timeline = [];
-let dataByTime = new Map();
+let framesByTime = new Map();
 
-function makeIcon(html){
+// UI elements
+const timeLabelEl = document.getElementById("timeLabel");
+const sliderEl = document.getElementById("slider");
+const statusEl = document.getElementById("statusLine");
+const showIconsEl = document.getElementById("showIcons");
+const topNEl = document.getElementById("topN");
+const botNEl = document.getElementById("botN");
+const showDotsEl = document.getElementById("showDots");
+const generateBtn = document.getElementById("generateBtn");
+
+function makeBadgeIcon(type){
+  // type: "TOP" or "BOTTOM"
+  const isTop = type === "TOP";
+  const symbol = isTop ? "✓" : "✖";
+  const stroke = isTop ? "#00b050" : "#e60000";
+
+  const html = `
+    <div style="
+      width:28px;height:28px;border-radius:14px;
+      background:#fff;
+      border:3px solid ${stroke};
+      display:flex;align-items:center;justify-content:center;
+      font-weight:900;
+      font-size:18px;
+      color:#111;
+      box-shadow:0 1px 6px rgba(0,0,0,0.25);
+    ">${symbol}</div>
+  `;
   return L.divIcon({
     html,
     className: "",
-    iconSize: [26,26],
-    iconAnchor: [13,13]
+    iconSize: [28,28],
+    iconAnchor: [14,14]
   });
+}
+
+function clearAll(){
+  polyLayer.clearLayers();
+  dotLayer.clearLayers();
+  iconLayer.clearLayers();
 }
 
 function rebuildAtIndex(idx){
   const key = timeline[idx];
-  const bundle = dataByTime.get(key);
-  if (!bundle) return;
+  const frame = framesByTime.get(key);
+  if (!frame) return;
 
-  document.getElementById("timeLabel").textContent = formatTimeLabel(key);
+  timeLabelEl.textContent = formatTimeLabel(key);
+  clearAll();
 
-  polyLayer.clearLayers();
-  pulseLayer.clearLayers();
-  markerLayer.clearLayers();
+  // 1) Polygons (rating color)
+  if (frame.polygons) polyLayer.addData(frame.polygons);
 
-  if (bundle.polygons) polyLayer.addData(bundle.polygons);
-
-  // Markers: only extremes to avoid confusion + overlap
-  // ✅ if rating >= 90, ✖ if rating <= 10
-  const markers = (bundle.markers || []);
-  for (const m of markers){
-    const rating = Number(m.rating ?? 0);
-
-    let show = false;
-    let icon = null;
-
-    if (rating >= 90){
-      show = true;
-      icon = makeIcon(
-        `<div style="
-          width:26px;height:26px;border-radius:13px;
-          background:rgba(255,255,255,0.92);
-          border:2px solid #00b050;
-          display:flex;align-items:center;justify-content:center;
-          font-weight:900;color:#00b050;font-size:16px;
-        ">✔</div>`
-      );
-    } else if (rating <= 10){
-      show = true;
-      icon = makeIcon(
-        `<div style="
-          width:26px;height:26px;border-radius:13px;
-          background:rgba(255,255,255,0.92);
-          border:2px solid #e60000;
-          display:flex;align-items:center;justify-content:center;
-          font-weight:900;color:#e60000;font-size:16px;
-        ">✖</div>`
-      );
+  // Collect “zone items” from polygons to compute extremes per window
+  const zoneItems = [];
+  try {
+    const feats = (frame.polygons && frame.polygons.features) ? frame.polygons.features : [];
+    for (const f of feats){
+      const p = f.properties || {};
+      // rating can be inside popup only, but in our generator it exists as p.rating or can be derived:
+      // We support either p.rating OR p.style.fillColor -> convert to approx not needed.
+      const rating = (p.rating !== undefined) ? Number(p.rating) : null;
+      const center = p.center || null; // if generator provides
+      zoneItems.push({ feature: f, props: p, rating, center });
     }
+  } catch(e){}
 
-    if (!show) continue;
+  // 2) Purple “intensity” dots (one per polygon/zone)
+  const showDots = !!(showDotsEl && showDotsEl.checked);
+  if (showDots){
+    const feats = (frame.polygons && frame.polygons.features) ? frame.polygons.features : [];
+    for (const f of feats){
+      const p = f.properties || {};
+      const rating = (p.rating !== undefined) ? Number(p.rating) : null;
+      const c = p.center; // [lat,lng] preferred
+      if (!c || !Array.isArray(c) || c.length !== 2) continue;
+      if (rating === null || Number.isNaN(rating)) continue;
 
-    const marker = L.marker([m.lat, m.lng], { icon, pane: "markers" });
+      const t = clamp01((rating - 1) / 99); // 0..1
+      const radius = 6 + Math.round(12 * t);
+      const opacity = 0.10 + 0.35 * t;
 
-    const popup = `
-      <div style="font-family:Arial; font-size:13px;">
-        <div style="font-weight:900; font-size:14px;">${m.zone}</div>
-        <div style="color:#666; margin-bottom:4px;">${m.borough}</div>
-        <div><b>Rating:</b> <span style="font-weight:900;">${rating}/100</span></div>
-        <hr style="margin:6px 0;">
-        <div><b>Pickups:</b> ${m.pickups}</div>
-        <div><b>Avg driver pay:</b> ${fmtMoney(m.avg_driver_pay)}</div>
-        <div><b>Avg tips:</b> ${fmtMoney(m.avg_tips)}</div>
-      </div>
-    `;
-    marker.bindPopup(popup, { maxWidth: 360 });
-    marker.addTo(markerLayer);
+      const circle = L.circleMarker([c[0], c[1]], {
+        pane: "dots",
+        radius,
+        color: "transparent",
+        weight: 0,
+        fillColor: "#7a2cff", // purple
+        fillOpacity: opacity
+      });
+
+      circle.addTo(dotLayer);
+    }
   }
 
-  // Purple pulse dots (gives “inside zone intensity” feel without true intra-zone heatmap)
-  // stronger rating => stronger purple/size
-  for (const m of markers){
-    const rating = Number(m.rating ?? 0);
-    const t = clamp01((rating - 1) / 99);
-    const radius = 6 + 16 * t;
-    const opacity = 0.15 + 0.35 * t;
+  // 3) Extremes-only icons (Top ✓, Bottom ✖) per current window
+  const showIcons = !!(showIconsEl && showIconsEl.checked);
+  if (!showIcons) return;
 
-    L.circleMarker([m.lat, m.lng], {
-      pane: "pulses",
-      radius,
-      color: "rgba(128, 0, 255, 0.0)",
-      fillColor: "rgba(128, 0, 255, 1.0)",
-      fillOpacity: opacity,
-      weight: 0
-    }).addTo(pulseLayer);
+  // Don’t spam icons when zoomed out
+  if (map.getZoom() < 12) return;
+
+  const topN = Math.max(0, Number(topNEl?.value || 25));
+  const botN = Math.max(0, Number(botNEl?.value || 25));
+
+  // We need sortable items with rating + center
+  const items = [];
+  const feats = (frame.polygons && frame.polygons.features) ? frame.polygons.features : [];
+  for (const f of feats){
+    const p = f.properties || {};
+    const rating = (p.rating !== undefined) ? Number(p.rating) : null;
+    const c = p.center;
+    if (!c || !Array.isArray(c) || c.length !== 2) continue;
+    if (rating === null || Number.isNaN(rating)) continue;
+    items.push({ p, rating, c });
+  }
+
+  // Sort high→low and low→high
+  const hi = [...items].sort((a,b)=>b.rating - a.rating).slice(0, topN);
+  const lo = [...items].sort((a,b)=>a.rating - b.rating).slice(0, botN);
+
+  const topIcon = makeBadgeIcon("TOP");
+  const botIcon = makeBadgeIcon("BOTTOM");
+
+  function bindPopupFor(item, type){
+    const p = item.p || {};
+    const zone = p.zone || p.Zone || p.name || "Zone";
+    const borough = p.borough || p.Borough || "Unknown";
+    const pickups = (p.pickups !== undefined) ? p.pickups : "n/a";
+    const avgPay = p.avg_driver_pay;
+    const avgTips = p.avg_tips;
+
+    const rating = item.rating;
+    const color = scoreToColorHex((rating - 1) / 99);
+
+    const label = (type === "TOP") ? "Very Good (Top)" : "Very Low (Bottom)";
+    return `
+      <div style="font-family:Arial; font-size:13px;">
+        <div style="font-weight:900; font-size:14px;">${zone}</div>
+        <div style="color:#666; margin-bottom:4px;">${borough} — <b>${label}</b></div>
+        <div><b>Rating:</b> <span style="font-weight:900; color:${color};">${rating}/100</span></div>
+        <hr style="margin:6px 0;">
+        <div><b>Pickups:</b> ${pickups}</div>
+        <div><b>Avg driver pay:</b> ${fmtMoney(avgPay)}</div>
+        <div><b>Avg tips:</b> ${fmtMoney(avgTips)}</div>
+      </div>
+    `;
+  }
+
+  for (const it of hi){
+    const m = L.marker([it.c[0], it.c[1]], { icon: topIcon, pane: "icons" });
+    m.bindPopup(bindPopupFor(it, "TOP"), { maxWidth: 360 });
+    m.addTo(iconLayer);
+  }
+
+  for (const it of lo){
+    const m = L.marker([it.c[0], it.c[1]], { icon: botIcon, pane: "icons" });
+    m.bindPopup(bindPopupFor(it, "BOTTOM"), { maxWidth: 360 });
+    m.addTo(iconLayer);
   }
 }
 
 async function loadHotspots(){
-  // Always load from Railway. (This is why GitHub file-size limits don't matter.)
-  const url = `${API_BASE}/hotspots`;
+  statusEl.textContent = `Loading data from Railway: ${RAILWAY_BASE}`;
+
+  const url = `${RAILWAY_BASE}/hotspots`;
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok){
-    throw new Error(`Load failed (${res.status}). ${await res.text()}`);
+    throw new Error(`Failed to fetch hotspots (${res.status}). Make sure Railway has /hotspots and you ran /generate.`);
   }
-  return await res.json();
-}
 
-async function main(){
-  const payload = await loadHotspots();
+  const payload = await res.json();
 
   timeline = payload.timeline || [];
-  dataByTime = new Map((payload.frames || []).map(f => [f.time, f]));
+  framesByTime = new Map((payload.frames || []).map(f => [f.time, f]));
 
-  const slider = document.getElementById("slider");
-  slider.min = 0;
-  slider.max = Math.max(0, timeline.length - 1);
-  slider.step = 1;
-  slider.value = 0;
+  sliderEl.min = 0;
+  sliderEl.max = Math.max(0, timeline.length - 1);
+  sliderEl.step = 1;
+  sliderEl.value = 0;
 
-  // Throttle slider for iPhone smoothness
+  // Throttled slider (smooth on iPhone)
   let pending = null;
-  slider.addEventListener("input", () => {
-    pending = Number(slider.value);
-    if (slider._raf) return;
-    slider._raf = requestAnimationFrame(() => {
-      slider._raf = null;
+  sliderEl.addEventListener("input", () => {
+    pending = Number(sliderEl.value);
+    if (sliderEl._raf) return;
+    sliderEl._raf = requestAnimationFrame(() => {
+      sliderEl._raf = null;
       if (pending !== null) rebuildAtIndex(pending);
     });
   });
 
+  // Rebuild when toggles change
+  function refresh(){ rebuildAtIndex(Number(sliderEl.value)); }
+  showIconsEl?.addEventListener("change", refresh);
+  showDotsEl?.addEventListener("change", refresh);
+  topNEl?.addEventListener("change", refresh);
+  botNEl?.addEventListener("change", refresh);
+  map.on("zoomend", refresh);
+
   if (timeline.length > 0){
+    statusEl.textContent = `Loaded ${timeline.length} time steps from Railway ✅`;
     rebuildAtIndex(0);
   } else {
-    document.getElementById("timeLabel").textContent = "No frames in hotspots JSON.";
+    statusEl.textContent = `Loaded but no frames found in payload.`;
+    timeLabelEl.textContent = "No data";
   }
 }
 
-main().catch(err => {
+async function runGenerate(){
+  // Optional button: triggers Railway generation
+  try{
+    generateBtn.disabled = true;
+    statusEl.textContent = "Generating on Railway… (this can take a bit)";
+    const genUrl = `${RAILWAY_BASE}/generate?bin_minutes=20&good_n=200&bad_n=120&win_good_n=80&win_bad_n=40&min_trips_per_window=10&simplify_meters=25`;
+    const res = await fetch(genUrl, { method: "POST" });
+    const j = await res.json();
+    if (!res.ok) throw new Error(j.error || `Generate failed (${res.status})`);
+    statusEl.textContent = `Generate OK ✅ (${j.size_mb} MB). Reloading data…`;
+    await loadHotspots();
+  } catch(e){
+    statusEl.textContent = "ERROR: " + (e?.message || String(e));
+  } finally {
+    generateBtn.disabled = false;
+  }
+}
+
+generateBtn?.addEventListener("click", runGenerate);
+
+loadHotspots().catch(err => {
   console.error(err);
-  document.getElementById("timeLabel").textContent = "ERROR: " + err.message;
+  statusEl.textContent = "ERROR: " + err.message;
+  timeLabelEl.textContent = "ERROR";
 });
