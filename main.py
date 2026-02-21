@@ -1,21 +1,20 @@
 from fastapi import FastAPI, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 import os
-import shutil
 import traceback
+import shutil
 
 from build_hotspots import build_hotspots_json
 
 app = FastAPI()
 
-# Persist EVERYTHING on the Railway Volume:
-# You mounted the volume at /data, so use it.
-DATA_DIR = Path(os.getenv("DATA_DIR", "/data")).resolve()
+# Persist everything in Railway Volume mounted at /data
+DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 OUT_PATH = DATA_DIR / "hotspots_20min.json"
 
-# Allow GitHub Pages to fetch from Railway
+# Allow GitHub Pages (and your phone browser) to fetch from Railway
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -40,19 +39,25 @@ def root():
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
     """
-    Upload parquet files to the persistent /data volume.
-    This streams to disk (won't try to hold 500MB in RAM).
+    Upload parquet to the Railway volume (/data).
+    Uses streaming copy so it doesn't load the whole file into RAM.
     """
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = DATA_DIR / file.filename
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        out_path = DATA_DIR / file.filename
 
-    with out_path.open("wb") as f:
-        shutil.copyfileobj(file.file, f)
+        with out_path.open("wb") as f:
+            shutil.copyfileobj(file.file, f)
 
-    return {
-        "saved": str(out_path),
-        "size_mb": round(out_path.stat().st_size / 1024 / 1024, 2)
-    }
+        return {
+            "saved": str(out_path),
+            "size_mb": round(out_path.stat().st_size / 1024 / 1024, 2)
+        }
+    except Exception as e:
+        return JSONResponse(
+            {"error": str(e), "trace": traceback.format_exc()},
+            status_code=500
+        )
 
 @app.post("/generate")
 def generate(
@@ -65,7 +70,7 @@ def generate(
     simplify_meters: float = 25.0
 ):
     """
-    Generates /data/hotspots_20min.json (persistent on the Railway volume).
+    Builds /data/hotspots_20min.json (persistent)
     """
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -99,26 +104,27 @@ def generate(
             status_code=500
         )
 
-@app.get("/hotspots_20min.json")
-def hotspots_json():
+@app.get("/hotspots")
+def hotspots():
     """
-    Serve the generated JSON to GitHub Pages.
+    Stable endpoint for GitHub Pages to fetch the JSON.
     """
     if not OUT_PATH.exists():
         return JSONResponse(
             {"error": "hotspots_20min.json not generated yet. Call /generate first."},
             status_code=404
         )
-    return FileResponse(str(OUT_PATH), media_type="application/json", filename="hotspots_20min.json")
+
+    resp = FileResponse(
+        str(OUT_PATH),
+        media_type="application/json",
+        filename="hotspots_20min.json",
+    )
+    # Avoid stale caching on phone
+    resp.headers["Cache-Control"] = "no-store, max-age=0"
+    return resp
 
 @app.get("/download")
 def download():
-    """
-    Same as /hotspots_20min.json (kept for backwards compatibility).
-    """
-    if not OUT_PATH.exists():
-        return JSONResponse(
-            {"error": "hotspots_20min.json not generated yet. Call /generate first."},
-            status_code=404
-        )
-    return FileResponse(str(OUT_PATH), media_type="application/json", filename="hotspots_20min.json")
+    # keep /download for convenience too
+    return hotspots()
