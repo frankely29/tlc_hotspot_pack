@@ -19,19 +19,17 @@ function formatTimeLabel(iso){
   });
 }
 
-// Wait-time color scale:
-// 1-10 minutes: green
-// 10-20 minutes: yellow
-// 20+ minutes: red
-function waitTimeToColor(waitMinutes){
-  const w = Number(waitMinutes);
-  if (!Number.isFinite(w)) return { fill:"#ffcc00", op:0.5 };
+// Rating color scale (1..100):
+// Low rating -> red, mid -> yellow, high -> green
+function ratingToColor(rating){
+  const r = Number(rating);
+  if (!Number.isFinite(r)) return { fill:"#ffcc00", op:0.5 };
 
-  if (w < 10){
+  if (r >= 67){
     return { fill:"#00d66b", op:0.72 };
   }
 
-  if (w < 20){
+  if (r >= 34){
     return { fill:"#ffcc00", op:0.66 };
   }
 
@@ -54,18 +52,16 @@ const polyLayer = L.geoJSON(null, {
   style: (feature) => {
     const p = feature?.properties || {};
 
+    const rating = p.rating ?? null;
     const waitMinutes = p.wait_minutes ?? p.wait_time_minutes ?? p.wait_time ?? p.wait ?? null;
 
-    const { fill, op } = waitTimeToColor(waitMinutes);
+    const { fill, op } = rating !== null && rating !== undefined
+      ? ratingToColor(rating)
+      : ratingToColor(waitMinutes);
 
-    // If builder provided fillColor, use it ONLY if wait-time fields are missing
-    const finalFill = (waitMinutes === null || waitMinutes === undefined)
-      ? (p.style?.fillColor || fill)
-      : fill;
-
-    const finalOp = (waitMinutes === null || waitMinutes === undefined)
-      ? (p.style?.fillOpacity ?? op)
-      : op;
+    // Prefer builder-provided color (already computed from score/rating)
+    const finalFill = p.style?.fillColor || fill;
+    const finalOp = p.style?.fillOpacity ?? op;
 
     return {
       color: "#1b1b1b",
@@ -80,12 +76,12 @@ const polyLayer = L.geoJSON(null, {
       layer.bindPopup(p.popup, { maxWidth: 360 });
     } else {
       // safe fallback popup
-      const waitMinutes = p.wait_minutes ?? p.wait_time_minutes ?? p.wait_time ?? p.wait ?? "n/a";
+      const rating = p.rating ?? "n/a";
       const pickups = p.pickups ?? "n/a";
       layer.bindPopup(
         `<div style="font-family:Arial;font-size:13px;">
-          <div style="font-weight:900;">Zone</div>
-          <div><b>Wait time:</b> ${waitMinutes} min</div>
+          <div style="font-weight:900;">${p.zone || "Zone"}</div>
+          <div><b>Rating:</b> ${rating}/100</div>
           <div><b>Pickups:</b> ${pickups}</div>
         </div>`,
         { maxWidth: 320 }
