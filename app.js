@@ -6,21 +6,6 @@ const LABEL_ZOOM_MIN = 10;        // below this: no labels at all
 const BOROUGH_ZOOM_SHOW = 14;     // borough line only when zoomed in enough
 const LABEL_MAX_CHARS_MID = 14;   // shorten zone names at mid zoom
 
-// HARD CAP to prevent clutter (THIS fixes your “too crowded” issue)
-function maxLabelsForZoom(z) {
-  const zoom = Math.round(z);
-  if (zoom < 10) return 0;
-  if (zoom === 10) return 14;   // green only
-  if (zoom === 11) return 22;   // green/purple
-  if (zoom === 12) return 34;   // + blue
-  if (zoom === 13) return 50;   // + sky
-  if (zoom === 14) return 70;   // + yellow
-  return 95;                    // all (still capped)
-}
-
-// Priority ranking so “important zones” win
-const BUCKET_PRIORITY = { green: 6, purple: 5, blue: 4, sky: 3, yellow: 2, red: 1 };
-
 // Demand priority label rules by zoom:
 // z10: green only
 // z11: green + purple
@@ -30,13 +15,15 @@ const BUCKET_PRIORITY = { green: 6, purple: 5, blue: 4, sky: 3, yellow: 2, red: 
 // z15+: + red (everything)
 function shouldShowLabel(bucket, zoom) {
   if (zoom < LABEL_ZOOM_MIN) return false;
+
   const b = (bucket || "").trim();
 
-  if (zoom >= 15) return true;
+  if (zoom >= 15) return true; // all
   if (zoom === 14) return b !== "red";
   if (zoom === 13) return b === "green" || b === "purple" || b === "blue" || b === "sky";
   if (zoom === 12) return b === "green" || b === "purple" || b === "blue";
   if (zoom === 11) return b === "green" || b === "purple";
+  // zoom === 10
   return b === "green";
 }
 
@@ -138,8 +125,27 @@ function shortenLabel(text, maxChars) {
   return t.slice(0, maxChars - 1) + "…";
 }
 function zoomClass(zoom) {
+  // Clamp to classes defined in CSS: z10..z15
   const z = Math.max(10, Math.min(15, Math.round(zoom)));
   return `z${z}`;
+}
+function labelHTML(props, zoom) {
+  const name = (props.zone_name || "").trim();
+  if (!name) return "";
+
+  const bucket = (props.bucket || "").trim();
+  if (!shouldShowLabel(bucket, Math.round(zoom))) return "";
+
+  // Shorten at lower zooms
+  const zoneText = zoom < 13 ? shortenLabel(name, LABEL_MAX_CHARS_MID) : name;
+
+  const borough = (props.borough || "").trim();
+  const showBorough = zoom >= BOROUGH_ZOOM_SHOW && borough;
+
+  return `
+    <div class="zn">${escapeHtml(zoneText)}</div>
+    ${showBorough ? `<div class="br">${escapeHtml(borough)}</div>` : ""}
+  `;
 }
 function escapeHtml(s) {
   return String(s)
@@ -148,25 +154,6 @@ function escapeHtml(s) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
-}
-
-function labelHTML(props, zoom) {
-  const name = (props.zone_name || "").trim();
-  if (!name) return "";
-
-  const z = Math.round(zoom);
-  const bucket = (props.bucket || "").trim();
-  if (!shouldShowLabel(bucket, z)) return "";
-
-  const zoneText = z < 13 ? shortenLabel(name, LABEL_MAX_CHARS_MID) : name;
-
-  const borough = (props.borough || "").trim();
-  const showBorough = z >= BOROUGH_ZOOM_SHOW && borough;
-
-  return `
-    <div class="zn">${escapeHtml(zoneText)}</div>
-    ${showBorough ? `<div class="br">${escapeHtml(borough)}</div>` : ""}
-  `;
 }
 
 // ---------- Leaflet map ----------
@@ -179,6 +166,82 @@ L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
   attribution: "&copy; OpenStreetMap &copy; CARTO",
   maxZoom: 19,
 }).addTo(map);
+
+// =====================
+// LIVE LOCATION (GPS)
+// =====================
+let myPosMarker = null;
+let myAccCircle = null;
+let watchId = null;
+
+const locBtn = L.control({ position: "topright" });
+locBtn.onAdd = function () {
+  const btn = L.DomUtil.create("button", "loc-btn");
+  btn.type = "button";
+  btn.title = "Show my location";
+  btn.innerHTML = "📍";
+  L.DomEvent.disableClickPropagation(btn);
+  L.DomEvent.on(btn, "click", () => startLiveLocation());
+  return btn;
+};
+locBtn.addTo(map);
+
+function startLiveLocation() {
+  if (!navigator.geolocation) {
+    alert("Geolocation not supported on this device/browser.");
+    return;
+  }
+
+  // If already watching, don't start another watcher
+  if (watchId != null) return;
+
+  watchId = navigator.geolocation.watchPosition(
+    (pos) => {
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+      const acc = pos.coords.accuracy || 0;
+      const ll = [lat, lng];
+
+      if (!myPosMarker) {
+        myPosMarker = L.circleMarker(ll, {
+          radius: 8,
+          weight: 2,
+          color: "#0b5cff",
+          fillColor: "#0b5cff",
+          fillOpacity: 0.9,
+        }).addTo(map);
+
+        myAccCircle = L.circle(ll, {
+          radius: acc,
+          weight: 1,
+          color: "#0b5cff",
+          fillColor: "#0b5cff",
+          fillOpacity: 0.12,
+        }).addTo(map);
+
+        // Center the first time only
+        map.setView(ll, Math.max(map.getZoom(), 14));
+      } else {
+        myPosMarker.setLatLng(ll);
+        if (myAccCircle) {
+          myAccCircle.setLatLng(ll);
+          myAccCircle.setRadius(acc);
+        }
+      }
+    },
+    (err) => {
+      console.error(err);
+      alert("Location error: " + (err.message || "Permission denied or GPS unavailable."));
+      // allow retry
+      watchId = null;
+    },
+    {
+      enableHighAccuracy: true,
+      maximumAge: 5000,
+      timeout: 10000,
+    }
+  );
+}
 
 let geoLayer = null;
 let timeline = [];
@@ -197,44 +260,13 @@ function buildPopupHTML(props) {
 
   return `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; font-size:13px;">
-      <div style="font-weight:900; margin-bottom:2px;">${escapeHtml(zoneName || `Zone ${props.LocationID ?? ""}`)}</div>
+      <div style="font-weight:800; margin-bottom:2px;">${escapeHtml(zoneName || `Zone ${props.LocationID ?? ""}`)}</div>
       ${borough ? `<div style="opacity:0.8; margin-bottom:6px;">${escapeHtml(borough)}</div>` : `<div style="margin-bottom:6px;"></div>`}
       <div><b>Rating:</b> ${rating} (${prettyBucket(bucket)})</div>
       <div><b>Pickups (last ${BIN_MINUTES} min):</b> ${pickups}</div>
       <div><b>Avg Driver Pay:</b> $${pay}</div>
     </div>
   `;
-}
-
-function computeLabelSet(frame, zoomNow) {
-  const z = Math.round(zoomNow);
-  const cap = maxLabelsForZoom(z);
-  if (cap <= 0) return new Set();
-
-  const feats = frame?.polygons?.features || [];
-
-  // build candidates, sort by bucket priority + rating + pickups
-  const candidates = feats
-    .map((f) => {
-      const p = f.properties || {};
-      const bucket = (p.bucket || "").trim();
-      const loc = p.LocationID;
-      const pri = BUCKET_PRIORITY[bucket] ?? 0;
-      const rating = Number(p.rating ?? 0);
-      const pickups = Number(p.pickups ?? 0);
-      return { loc, bucket, pri, rating, pickups };
-    })
-    .filter((x) => x.loc != null && x.pri > 0 && shouldShowLabel(x.bucket, z))
-    .sort((a, b) => {
-      if (b.pri !== a.pri) return b.pri - a.pri;
-      if (b.rating !== a.rating) return b.rating - a.rating;
-      return b.pickups - a.pickups;
-    })
-    .slice(0, cap);
-
-  const set = new Set();
-  for (const c of candidates) set.add(Number(c.loc));
-  return set;
 }
 
 function renderFrame(frame) {
@@ -248,9 +280,6 @@ function renderFrame(frame) {
 
   const zoomNow = map.getZoom();
   const zClass = zoomClass(zoomNow);
-
-  // IMPORTANT: only allow a limited number of labels (prevents crowding)
-  const labelSet = computeLabelSet(frame, zoomNow);
 
   geoLayer = L.geoJSON(frame.polygons, {
     style: (feature) => {
@@ -266,9 +295,6 @@ function renderFrame(frame) {
     onEachFeature: (feature, layer) => {
       const props = feature.properties || {};
       layer.bindPopup(buildPopupHTML(props), { maxWidth: 300 });
-
-      const loc = Number(props.LocationID);
-      if (!labelSet.has(loc)) return; // <--- THIS is the crowding fix
 
       const html = labelHTML(props, zoomNow);
       if (!html) return;
@@ -307,10 +333,12 @@ async function loadTimeline() {
   await loadFrame(idx);
 }
 
+// Re-render on zoom (no network)
 map.on("zoomend", () => {
   if (currentFrame) renderFrame(currentFrame);
 });
 
+// Debounced slider
 let sliderDebounce = null;
 slider.addEventListener("input", () => {
   const idx = Number(slider.value);
@@ -318,6 +346,7 @@ slider.addEventListener("input", () => {
   sliderDebounce = setTimeout(() => loadFrame(idx).catch(console.error), 80);
 });
 
+// Boot
 loadTimeline().catch((err) => {
   console.error(err);
   timeLabel.textContent = `Error loading timeline: ${err.message}`;
