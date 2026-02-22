@@ -70,6 +70,22 @@
 
     input[type="range"] { width: 100%; }
 
+    /* ---------- CONTEXT TOGGLE BUTTON ---------- */
+    #toggleContext {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      z-index: 1100;
+      background: rgba(255,255,255,0.92);
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-weight: 800;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+      cursor: pointer;
+    }
+
     /* ---------- LABEL TOOLTIP ---------- */
     .zone-label {
       background: rgba(255,255,255,0.8);
@@ -91,29 +107,25 @@
       line-height: 1.05;
     }
 
-    /* ---------- ZOOM SCALING ---------- */
+    /* ---------- ZOOM SCALING (borough reduced aggressively) ---------- */
 
-    /* Very zoomed out */
     .zone-label.z10 .zn { font-size: 8px; }
     .zone-label.z10 .br { font-size: 2px; opacity: 0.25; }
 
     .zone-label.z11 .zn { font-size: 9px; }
-    .zone-label.z11 .br { font-size: 3px; opacity: 0.3; }
+    .zone-label.z11 .br { font-size: 3px; opacity: 0.30; }
 
-    /* Medium zoom — CUT IN HALF AGAIN */
     .zone-label.z12 .zn { font-size: 10px; }
     .zone-label.z12 .br { font-size: 3px; opacity: 0.35; }
 
     .zone-label.z13 .zn { font-size: 11px; }
-    .zone-label.z13 .br { font-size: 4px; opacity: 0.4; }
+    .zone-label.z13 .br { font-size: 4px; opacity: 0.40; }
 
-    /* Close zoom */
     .zone-label.z14 .zn { font-size: 13px; }
-    .zone-label.z14 .br { font-size: 7px; opacity: 0.6; }
+    .zone-label.z14 .br { font-size: 7px; opacity: 0.60; }
 
     .zone-label.z15 .zn { font-size: 15px; }
     .zone-label.z15 .br { font-size: 10px; opacity: 0.75; }
-
   </style>
 </head>
 
@@ -121,6 +133,10 @@
 
   <div id="map"></div>
 
+  <!-- Context overlay toggle (separate from TLC data) -->
+  <button id="toggleContext">Places/Events: OFF</button>
+
+  <!-- ---------- LEGEND ---------- -->
   <div class="legend">
     <div class="title">Demand Colors</div>
 
@@ -137,13 +153,16 @@
     </div>
   </div>
 
+  <!-- ---------- TIME SLIDER ---------- -->
   <div class="bottom">
     <div class="time-label" id="timeLabel">Loading…</div>
     <input id="slider" type="range" min="0" max="0" step="1" value="0" />
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="app.js?v=25"></script>
+
+  <!-- cache-buster: bump this when you change app.js -->
+  <script src="app.js?v=30"></script>
 
 </body>
 </html>
