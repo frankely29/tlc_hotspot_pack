@@ -130,7 +130,6 @@ function buildPopupHTML(props) {
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; font-size:13px;">
       <div style="font-weight:800; margin-bottom:2px;">${title}</div>
       ${sub ? `<div style="opacity:0.8; margin-bottom:6px;">${sub}</div>` : `<div style="margin-bottom:6px;"></div>`}
-      <div><b>LocationID:</b> ${zid}</div>
       <div><b>Rating:</b> ${rating} (${prettyBucket(bucket)})</div>
       <div><b>Pickups (last ${BIN_MINUTES} min):</b> ${pickups}</div>
       <div><b>Avg Driver Pay:</b> $${pay}</div>
@@ -159,7 +158,22 @@ async function loadFrame(idx) {
       };
     },
     onEachFeature: (feature, layer) => {
-      layer.bindPopup(buildPopupHTML(feature.properties || {}), { maxWidth: 300 });
+      const props = feature.properties || {};
+
+      // 1) Popup on tap/click
+      layer.bindPopup(buildPopupHTML(props), { maxWidth: 300 });
+
+      // 2) ALWAYS-ON label on top of each zone
+      const name = (props.zone_name || "").trim();
+      const labelText = name ? name : `Zone ${props.LocationID ?? ""}`;
+
+      layer.bindTooltip(labelText, {
+        permanent: true,
+        direction: "center",
+        className: "zone-label",
+        opacity: 0.9,
+        interactive: false,
+      });
     },
   }).addTo(map);
 }
@@ -175,7 +189,6 @@ async function loadTimeline() {
   slider.max = String(timeline.length - 1);
   slider.step = "1";
 
-  // Init to closest NYC current time window (with week wrap handling)
   const nowMinWeek = getNowNYCMinuteOfWeekRounded();
   const idx = pickClosestIndex(minutesOfWeek, nowMinWeek);
   slider.value = String(idx);
