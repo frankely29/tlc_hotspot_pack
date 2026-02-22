@@ -5,7 +5,8 @@ const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
 const BIN_MINUTES = 20;
 
 // =========================
-// Helpers
+// ISO helpers (backend timestamps are "YYYY-MM-DDTHH:MM:SS" with no TZ)
+// We treat them as "NYC local label buckets" for display.
 // =========================
 function parseIsoNoTz(iso) {
   const [d, t] = iso.split("T");
@@ -14,10 +15,11 @@ function parseIsoNoTz(iso) {
   return { Y, M, D, h, m, s };
 }
 
+// Convert ISO string to "Mon=0..Sun=6" using UTC date math (works consistently for day label)
 function dowMon0FromIso(iso) {
   const { Y, M, D, h, m, s } = parseIsoNoTz(iso);
   const dt = new Date(Date.UTC(Y, M - 1, D, h, m, s));
-  const dowSun0 = dt.getUTCDay(); // 0..6
+  const dowSun0 = dt.getUTCDay(); // 0=Sun..6=Sat
   return dowSun0 === 0 ? 6 : dowSun0 - 1; // Mon=0..Sun=6
 }
 
@@ -37,6 +39,7 @@ function formatNYCLabel(iso) {
   return `${names[dow_m]} ${hr12}:${mm} ${ampm}`;
 }
 
+// Get current NYC minute-of-week rounded DOWN to BIN_MINUTES
 function getNowNYCMinuteOfWeekRounded() {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
@@ -84,25 +87,7 @@ async function fetchJSON(url) {
 }
 
 // =========================
-// Legend count UI
-// =========================
-const elGreen = document.getElementById("countGreen");
-const elBlue = document.getElementById("countBlue");
-const elSky = document.getElementById("countSky");
-const elYellow = document.getElementById("countYellow");
-const elRed = document.getElementById("countRed");
-
-function setLegendCounts(summary) {
-  // summary is like {green, blue, sky, yellow, red}
-  elGreen.textContent = summary?.green ?? 0;
-  elBlue.textContent = summary?.blue ?? 0;
-  elSky.textContent = summary?.sky ?? 0;
-  elYellow.textContent = summary?.yellow ?? 0;
-  elRed.textContent = summary?.red ?? 0;
-}
-
-// =========================
-// Map init
+// Leaflet map
 // =========================
 const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 11);
 
@@ -113,15 +98,18 @@ L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
 
 let geoLayer = null;
 
-// Slider UI
+// UI
 const slider = document.getElementById("slider");
 const timeLabel = document.getElementById("timeLabel");
 
-// Data
+// Timeline data
 let timeline = [];
 let minutesOfWeek = [];
 
-// Popup (no ETA, fully factual)
+// =========================
+// Popup content (DATA-ACCURATE timeframe label)
+// Each frame is a 20-minute window, so pickups are for "last 20 min" (selected window).
+// =========================
 function buildPopupHTML(props) {
   const rating = props.rating ?? "";
   const bucket = props.bucket ?? "";
@@ -132,7 +120,7 @@ function buildPopupHTML(props) {
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; font-size:13px;">
       <div style="font-weight:800; margin-bottom:4px;">Zone ${props.LocationID}</div>
       <div><b>Rating:</b> ${rating} (${bucket})</div>
-      <div><b>Pickups:</b> ${pickups}</div>
+      <div><b>Pickups (last ${BIN_MINUTES} min):</b> ${pickups}</div>
       <div><b>Avg Driver Pay:</b> $${pay}</div>
     </div>
   `;
@@ -141,11 +129,10 @@ function buildPopupHTML(props) {
 async function loadFrame(idx) {
   const frame = await fetchJSON(`${RAILWAY_BASE}/frame/${idx}`);
 
-  // top left + bottom time label
+  // Bottom label
   timeLabel.textContent = formatNYCLabel(frame.time);
-  setLegendCounts(frame.summary);
 
-  // redraw polygons
+  // Redraw polygons
   if (geoLayer) {
     geoLayer.remove();
     geoLayer = null;
@@ -179,7 +166,7 @@ async function loadTimeline() {
   slider.max = String(timeline.length - 1);
   slider.step = "1";
 
-  // Init to closest NYC now window
+  // Start slider on closest NYC "now" window (with week wrap handling)
   const nowMinWeek = getNowNYCMinuteOfWeekRounded();
   const idx = pickClosestIndex(minutesOfWeek, nowMinWeek);
   slider.value = String(idx);
@@ -187,7 +174,7 @@ async function loadTimeline() {
   await loadFrame(idx);
 }
 
-// Debounced slider
+// Debounced slider to avoid hammering backend
 let sliderDebounce = null;
 slider.addEventListener("input", () => {
   const idx = Number(slider.value);
@@ -199,5 +186,4 @@ slider.addEventListener("input", () => {
 loadTimeline().catch((err) => {
   console.error(err);
   timeLabel.textContent = "Error loading timeline. Check Railway /timeline.";
-  setLegendCounts({ green: 0, blue: 0, sky: 0, yellow: 0, red: 0 });
 });
