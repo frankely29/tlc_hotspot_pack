@@ -1,115 +1,149 @@
 <!doctype html>
-<html lang="en">
+<html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>NYC FHV Hotspot Map</title>
+  <title>NYC TLC Hotspot Map</title>
 
-  <!-- Leaflet (no integrity attrs = fewer Safari/CDN issues) -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    crossorigin=""
+  />
 
   <style>
-    html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-    #map { height: 100vh; width: 100vw; }
+    html, body { height: 100%; margin: 0; }
+    #map { height: 100%; width: 100%; }
 
-    /* Legend */
-    #legendBox{
+    /* ---------- LEGEND ---------- */
+    .legend {
       position: absolute;
       top: 12px;
       left: 12px;
       z-index: 1000;
       background: rgba(255,255,255,0.92);
-      border: 1px solid rgba(0,0,0,0.12);
-      border-radius: 10px;
       padding: 10px 12px;
-      max-width: 270px;
-      box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+      border-radius: 10px;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      font-size: 14px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+      max-width: 320px;
     }
-    #legendTitle { font-weight: 800; font-size: 14px; margin-bottom: 6px; }
-    .legendRow { display:flex; align-items:center; gap:8px; font-size: 12px; margin: 4px 0; }
-    .swatch { width: 14px; height: 14px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.15); }
 
-    /* Colors (match your buckets) */
-    .c-green  { background:#1fd655; }
-    .c-purple { background:#8a5cff; }
-    .c-blue   { background:#1e6bff; }
-    .c-sky    { background:#41c7ff; }
-    .c-yellow { background:#ffcc33; }
-    .c-red    { background:#ff3b30; }
+    .legend .title { font-weight: 800; margin-bottom: 6px; }
+    .legend .row { display: flex; align-items: center; margin: 4px 0; }
 
-    /* Bottom bar */
-    #bottomBar{
-      position:absolute;
-      left:12px;
-      right:12px;
-      bottom:12px;
-      z-index:1000;
+    .swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      margin-right: 8px;
+      border: 1px solid rgba(0,0,0,0.15);
+    }
+
+    .sub {
+      font-size: 12px;
+      opacity: 0.75;
+      margin-top: 8px;
+      line-height: 1.2;
+    }
+
+    /* ---------- BOTTOM SLIDER ---------- */
+    .bottom {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      bottom: 12px;
+      z-index: 1000;
       background: rgba(255,255,255,0.92);
-      border: 1px solid rgba(0,0,0,0.12);
       border-radius: 12px;
       padding: 10px 12px;
-      box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.15);
     }
-    #timeRow{ display:flex; justify-content:space-between; align-items:baseline; gap:10px; margin-bottom:8px; }
-    #timeLabel{ font-weight:900; font-size:14px; }
-    #tzHint{ font-size:11px; opacity:0.75; }
-    #slider{ width:100%; }
 
-    /* Labels (tooltips) */
-    .zone-label{
-      background: transparent !important;
-      border: none !important;
-      box-shadow: none !important;
+    .time-label {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    input[type="range"] { width: 100%; }
+
+    /* ---------- LABEL TOOLTIP ---------- */
+    .zone-label {
+      background: rgba(255,255,255,0.8);
+      border: 0;
+      border-radius: 6px;
+      padding: 2px 5px;
       color: #111;
-      text-align:center;
-      font-weight: 900;
-      text-shadow: 0 1px 2px rgba(255,255,255,0.9);
-      pointer-events:none;
-      line-height: 1.05;
-      padding: 0;
-      margin: 0;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+      white-space: nowrap;
     }
-    .zone-label .zn{ display:block; white-space:nowrap; }
-    .zone-label .br{ display:block; font-weight:800; opacity:0.85; margin-top:1px; white-space:nowrap; }
 
-    /* Zoom classes used by app.js zoomClass() */
-    .zone-label.z10 { font-size: 7px; }
-    .zone-label.z11 { font-size: 8px; }
-    .zone-label.z12 { font-size: 9px; }
-    .zone-label.z13 { font-size: 11px; }
-    .zone-label.z14 { font-size: 13px; }
-    .zone-label.z15 { font-size: 15px; }
+    .zone-label .zn {
+      font-weight: 800;
+      line-height: 1.05;
+    }
+
+    .zone-label .br {
+      font-weight: 600;
+      line-height: 1.05;
+    }
+
+    /* ---------- ZOOM SCALING ---------- */
+
+    /* Very zoomed out */
+    .zone-label.z10 .zn { font-size: 8px; }
+    .zone-label.z10 .br { font-size: 2px; opacity: 0.25; }
+
+    .zone-label.z11 .zn { font-size: 9px; }
+    .zone-label.z11 .br { font-size: 3px; opacity: 0.3; }
+
+    /* Medium zoom — CUT IN HALF AGAIN */
+    .zone-label.z12 .zn { font-size: 10px; }
+    .zone-label.z12 .br { font-size: 3px; opacity: 0.35; }
+
+    .zone-label.z13 .zn { font-size: 11px; }
+    .zone-label.z13 .br { font-size: 4px; opacity: 0.4; }
+
+    /* Close zoom */
+    .zone-label.z14 .zn { font-size: 13px; }
+    .zone-label.z14 .br { font-size: 7px; opacity: 0.6; }
+
+    .zone-label.z15 .zn { font-size: 15px; }
+    .zone-label.z15 .br { font-size: 10px; opacity: 0.75; }
+
   </style>
 </head>
 
 <body>
+
   <div id="map"></div>
 
-  <div id="legendBox">
-    <div id="legendTitle">NYC FHV Hotspots</div>
-    <div class="legendRow"><span class="swatch c-green"></span>Green = Highest</div>
-    <div class="legendRow"><span class="swatch c-purple"></span>Purple = High</div>
-    <div class="legendRow"><span class="swatch c-blue"></span>Blue = Medium</div>
-    <div class="legendRow"><span class="swatch c-sky"></span>Sky = Normal</div>
-    <div class="legendRow"><span class="swatch c-yellow"></span>Yellow = Below Normal</div>
-    <div class="legendRow"><span class="swatch c-red"></span>Red = Very Low / Avoid</div>
+  <div class="legend">
+    <div class="title">Demand Colors</div>
+
+    <div class="row"><span class="swatch" style="background:#00b050;"></span>Green = Highest</div>
+    <div class="row"><span class="swatch" style="background:#8000ff;"></span>Purple = High</div>
+    <div class="row"><span class="swatch" style="background:#0066ff;"></span>Blue = Medium</div>
+    <div class="row"><span class="swatch" style="background:#66ccff;"></span>Sky = Normal</div>
+    <div class="row"><span class="swatch" style="background:#ffd400;"></span>Yellow = Below Normal</div>
+    <div class="row"><span class="swatch" style="background:#e60000;"></span>Red = Very Low / Avoid</div>
+
+    <div class="sub">
+      Colors come from rating (1–100) for the selected 20-minute window.<br/>
+      Time label is NYC time.
+    </div>
   </div>
 
-  <div id="bottomBar">
-    <div id="timeRow">
-      <div>
-        <div id="timeLabel">Loading…</div>
-        <div id="tzHint">NYC time (America/New_York)</div>
-      </div>
-      <div id="tzHint">Window: 20 min</div>
-    </div>
+  <div class="bottom">
+    <div class="time-label" id="timeLabel">Loading…</div>
     <input id="slider" type="range" min="0" max="0" step="1" value="0" />
   </div>
 
-  <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="app.js?v=25"></script>
 
-  <!-- Your app.js -->
-  <script src="app.js"></script>
 </body>
 </html>
