@@ -1,6 +1,13 @@
 const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
 const BIN_MINUTES = 20;
 
+// Refresh (data/frame) every 5 minutes
+const REFRESH_MS = 5 * 60 * 1000;
+
+// Map rotation behavior
+const MAP_ROTATE_ENABLED_DEFAULT = true;
+const MAP_ROTATE_SMOOTH = true; // smoother rotation
+
 /** LABEL VISIBILITY (mobile-friendly, demand-priority)
  * z10: green only
  * z11: green + purple
@@ -10,12 +17,11 @@ const BIN_MINUTES = 20;
  * z15+: + red (everything)
  */
 const LABEL_ZOOM_MIN = 10;
-const BOROUGH_ZOOM_SHOW = 15;     // borough line only when very zoomed in
+const BOROUGH_ZOOM_SHOW = 15;
 const LABEL_MAX_CHARS_MID = 14;
 
 function shouldShowLabel(bucket, zoom) {
   if (zoom < LABEL_ZOOM_MIN) return false;
-
   const b = (bucket || "").trim();
   if (zoom >= 15) return true;
   if (zoom === 14) return b !== "red";
@@ -211,7 +217,6 @@ function updateRecommendation(frame) {
     return;
   }
 
-  // rating matters most; distance matters some
   const DIST_PENALTY_PER_MILE = 2.0;
 
   let best = null;
@@ -370,9 +375,10 @@ slider.addEventListener("input", () => {
   sliderDebounce = setTimeout(() => loadFrame(idx).catch(console.error), 80);
 });
 
-// ---------- Live location arrow + auto-center ----------
+// ---------- Live location arrow + auto-center + map rotation ----------
 let autoCenter = true;
 let gpsFirstFixDone = false;
+let mapRotateEnabled = MAP_ROTATE_ENABLED_DEFAULT;
 
 let navMarker = null;
 let lastPos = null; // {lat,lng,ts}
@@ -401,6 +407,21 @@ function setNavRotation(deg) {
   el.style.transform = `rotate(${deg}deg)`;
 }
 
+function applyMapRotation(deg) {
+  if (!mapRotateEnabled) return;
+  const container = map.getContainer();
+  if (!container) return;
+
+  // We rotate the whole map container. This is "simple rotation".
+  // NOTE: some labels/popups rotate too (usually desired for navigation).
+  const rot = `rotate(${-deg}deg)`; // negative so heading-up
+  if (MAP_ROTATE_SMOOTH) {
+    container.style.transition = "transform 120ms linear";
+  }
+  container.style.transformOrigin = "50% 50%";
+  container.style.transform = rot;
+}
+
 function computeBearingDeg(from, to) {
   const toRad = (x) => (x * Math.PI) / 180;
   const toDeg = (x) => (x * 180) / Math.PI;
@@ -417,13 +438,18 @@ function computeBearingDeg(from, to) {
   return brng;
 }
 
-function addAutoCenterControl() {
+function addControls() {
+  // Auto-center button
   const ctrl = L.control({ position: "bottomright" });
   ctrl.onAdd = function () {
-    const btn = L.DomUtil.create("button", "autoCenterBtn");
+    const wrap = L.DomUtil.create("div");
+    wrap.style.display = "flex";
+    wrap.style.flexDirection = "column";
+    wrap.style.gap = "8px";
+
+    const btn = L.DomUtil.create("button", "autoCenterBtn", wrap);
     btn.type = "button";
     btn.textContent = "Auto-center: ON";
-
     L.DomEvent.disableClickPropagation(btn);
     L.DomEvent.on(btn, "click", () => {
       autoCenter = !autoCenter;
@@ -431,7 +457,25 @@ function addAutoCenterControl() {
       if (autoCenter && userLatLng) map.panTo(userLatLng, { animate: true });
     });
 
-    return btn;
+    // Rotate toggle
+    const rotBtn = L.DomUtil.create("button", "autoCenterBtn", wrap);
+    rotBtn.type = "button";
+    rotBtn.textContent = "Rotate: ON";
+    L.DomEvent.disableClickPropagation(rotBtn);
+    L.DomEvent.on(rotBtn, "click", () => {
+      mapRotateEnabled = !mapRotateEnabled;
+      rotBtn.textContent = mapRotateEnabled ? "Rotate: ON" : "Rotate: OFF";
+      if (!mapRotateEnabled) {
+        // reset rotation
+        const c = map.getContainer();
+        c.style.transform = "";
+        c.style.transition = "";
+      } else {
+        applyMapRotation(lastHeadingDeg);
+      }
+    });
+
+    return wrap;
   };
   ctrl.addTo(map);
 }
@@ -448,26 +492,24 @@ function startLocationWatch() {
     zIndexOffset: 9999,
   }).addTo(map);
 
-  addAutoCenterControl();
+  addControls();
 
   navigator.geolocation.watchPosition(
     (pos) => {
       const lat = pos.coords.latitude;
       const lng = pos.coords.longitude;
-      const heading = pos.coords.heading; // may be null
+      const heading = pos.coords.heading; // may be null on iOS Safari
       const ts = pos.timestamp || Date.now();
 
       userLatLng = { lat, lng };
       if (navMarker) navMarker.setLatLng(userLatLng);
 
-      // movement + heading
       let isMoving = false;
 
       if (lastPos) {
         const dMi = haversineMiles({ lat: lastPos.lat, lng: lastPos.lng }, userLatLng);
         const dtSec = Math.max(1, (ts - lastPos.ts) / 1000);
         const mph = (dMi / dtSec) * 3600;
-
         isMoving = mph >= 2.0;
 
         if (typeof heading === "number" && Number.isFinite(heading)) {
@@ -484,7 +526,10 @@ function startLocationWatch() {
       setNavRotation(lastHeadingDeg);
       setNavVisual(isMoving);
 
-      // ✅ One-time zoom-in on first GPS fix
+      // Rotate map in direction of travel (heading-up)
+      applyMapRotation(lastHeadingDeg);
+
+      // one-time zoom to you on first fix
       if (!gpsFirstFixDone) {
         gpsFirstFixDone = true;
         const targetZoom = Math.max(map.getZoom(), 14);
@@ -513,6 +558,17 @@ function startLocationWatch() {
     setNavVisual(!!recentlyMoved);
   }, 1200);
 }
+
+// ---------- Auto-refresh every 5 minutes ----------
+async function refreshCurrentFrame() {
+  try {
+    const idx = Number(slider.value || "0");
+    await loadFrame(idx);
+  } catch (e) {
+    console.warn("Auto-refresh failed:", e);
+  }
+}
+setInterval(refreshCurrentFrame, REFRESH_MS);
 
 // Boot
 loadTimeline().catch((err) => {
