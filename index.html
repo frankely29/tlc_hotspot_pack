@@ -25,42 +25,42 @@
     /* Legend box (top-left) */
     .legend {
       position: absolute;
-      top: 10px;
-      left: 10px;
+      top: 12px;
+      left: 12px;
       z-index: 1000;
-      background: rgba(255,255,255,0.90);
-      padding: 10px 10px 8px 10px;
+      background: rgba(255,255,255,0.92);
+      padding: 12px 12px 10px 12px;
       border-radius: 12px;
-      box-shadow: 0 6px 18px rgba(0,0,0,0.14);
+      box-shadow: 0 6px 18px rgba(0,0,0,0.15);
       font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
-      max-width: 280px;
+      max-width: 320px;
     }
     .legend h3 {
-      margin: 0 0 6px 0;
-      font-size: 15px;
-      font-weight: 900;
+      margin: 0 0 8px 0;
+      font-size: 16px;
+      font-weight: 800;
     }
     .legend .row {
       display: flex;
       align-items: center;
-      gap: 8px;
-      margin: 5px 0;
-      font-size: 13px;
-      font-weight: 800;
+      gap: 10px;
+      margin: 6px 0;
+      font-size: 15px;
+      font-weight: 700;
     }
     .legend .swatch {
-      width: 16px;
-      height: 16px;
+      width: 18px;
+      height: 18px;
       border-radius: 4px;
       border: 1px solid rgba(0,0,0,0.15);
-      flex: 0 0 16px;
+      flex: 0 0 18px;
     }
     .legend .sub {
-      margin-top: 8px;
-      font-size: 12px;
-      opacity: 0.82;
-      line-height: 1.2;
-      font-weight: 650;
+      margin-top: 10px;
+      font-size: 13px;
+      opacity: 0.85;
+      line-height: 1.25;
+      font-weight: 600;
     }
 
     /* Bottom slider bar */
@@ -87,7 +87,12 @@
       margin: 0;
     }
 
-    /* ZONE LABELS (tooltips) */
+    /* =========================================================
+       ZONE LABELS (tooltips)
+       - Your app.js sets className: `zone-label zXX`
+       - .zn = zone name
+       - .br = borough line (NOW 3x smaller)
+       ========================================================= */
     .zone-label {
       background: transparent;
       border: none;
@@ -96,6 +101,8 @@
       text-align: center;
       pointer-events: none;
     }
+
+    /* Base pill styling for BOTH lines */
     .zone-label .zn,
     .zone-label .br {
       display: inline-block;
@@ -105,23 +112,27 @@
       padding: 2px 8px;
       margin: 1px 0;
       white-space: nowrap;
-      max-width: 200px;
+      max-width: 220px;
       overflow: hidden;
       text-overflow: ellipsis;
       box-shadow: 0 2px 6px rgba(0,0,0,0.08);
     }
+
+    /* Zone name = stronger */
     .zone-label .zn {
       font-weight: 900;
       letter-spacing: 0.1px;
     }
+
+    /* Borough line = ALWAYS smaller + lighter */
     .zone-label .br {
       font-weight: 800;
-      opacity: 0.70;
-      padding: 1px 7px;
-      border-radius: 10px;
+      opacity: 0.75;
+      padding: 1px 7px;      /* slightly tighter */
+      border-radius: 10px;    /* less “pill” feeling */
     }
 
-    /* Zoom scaling for zone name */
+    /* ---------- Zoom scaling for zone name (zn) ---------- */
     .zone-label.z10 .zn { font-size: 9px;  }
     .zone-label.z11 .zn { font-size: 10px; }
     .zone-label.z12 .zn { font-size: 11px; }
@@ -129,31 +140,33 @@
     .zone-label.z14 .zn { font-size: 13px; }
     .zone-label.z15 .zn { font-size: 14px; }
 
-    /* Borough line scaling (much smaller) */
-    .zone-label.z10 .br { font-size: 0px; padding: 0; border: 0; }
-    .zone-label.z11 .br { font-size: 0px; padding: 0; border: 0; }
-    .zone-label.z12 .br { font-size: 0px; padding: 0; border: 0; }
-    .zone-label.z13 .br { font-size: 8px; }
-    .zone-label.z14 .br { font-size: 9px; }
-    .zone-label.z15 .br { font-size: 10px; }
+    /* ---------- Zoom scaling for borough line (br) ----------
+       Borough is only shown at zoom >= 14 by app.js.
+       We keep it hidden for z10-12, and make it ~3x smaller when shown.
+    */
+    .zone-label.z10 .br { font-size: 0px;  padding: 0; border: 0; }
+    .zone-label.z11 .br { font-size: 0px;  padding: 0; border: 0; }
+    .zone-label.z12 .br { font-size: 0px;  padding: 0; border: 0; }
 
-    /* Mobile: legend ~50% smaller so it doesn’t block map */
-    @media (max-width: 480px) {
-      .legend {
-        max-width: 170px;
-        padding: 8px 8px 6px 8px;
-        border-radius: 10px;
-      }
-      .legend h3 { font-size: 13px; margin-bottom: 5px; }
-      .legend .row { font-size: 11px; margin: 4px 0; gap: 7px; }
-      .legend .swatch { width: 14px; height: 14px; flex: 0 0 14px; }
-      .legend .sub { font-size: 10px; margin-top: 6px; }
+    /* If you ever show borough at z13 in the future, keep it tiny */
+    .zone-label.z13 .br { font-size: 3px; }
 
+    /* Borough starts showing at zoom >= 14 (your app.js) */
+    .zone-label.z14 .br { font-size: 3px; }
+    .zone-label.z15 .br { font-size: 4px; }
+
+    /* Make labels less “thick” on phones */
+    @media (max-width: 420px) {
+      .legend { max-width: 280px; }
+      .legend .row { font-size: 14px; }
       .timeLabel { font-size: 22px; }
-      .zone-label .zn, .zone-label .br { max-width: 160px; }
-      .zone-label.z13 .br { font-size: 7px; }
-      .zone-label.z14 .br { font-size: 8px; }
-      .zone-label.z15 .br { font-size: 9px; }
+
+      .zone-label .zn, .zone-label .br { max-width: 180px; }
+
+      /* keep borough 3x smaller on mobile too */
+      .zone-label.z13 .br { font-size: 3px; }
+      .zone-label.z14 .br { font-size: 3px; }
+      .zone-label.z15 .br { font-size: 4px; }
     }
   </style>
 </head>
@@ -171,8 +184,8 @@
     <div class="row"><span class="swatch" style="background:#e60000"></span> Red = Very Low / Avoid</div>
 
     <div class="sub">
-      Rating (1–100) for selected 20-min window.<br/>
-      Time is NYC.
+      Colors come from rating (1–100) for the selected 20-minute window.<br/>
+      Time label is NYC time.
     </div>
   </div>
 
@@ -181,6 +194,7 @@
     <input id="slider" type="range" min="0" max="0" value="0" step="1" />
   </div>
 
+  <!-- Your frontend logic -->
   <script src="./app.js"></script>
 </body>
 </html>
