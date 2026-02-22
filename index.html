@@ -11,7 +11,6 @@
     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
     crossorigin=""
   />
-
   <style>
     html, body { height: 100%; margin: 0; }
     #map { height: 100%; width: 100%; }
@@ -30,12 +29,18 @@
       max-width: 320px;
     }
     .legend .title { font-weight: 800; margin-bottom: 6px; }
-    .legend .row { display: flex; align-items: center; margin: 4px 0; }
+    .legend .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 4px 0; }
     .legend .left { display: flex; align-items: center; }
-    .swatch {
-      width: 14px; height: 14px; border-radius: 3px;
-      margin-right: 8px; border: 1px solid rgba(0,0,0,0.15);
+    .swatch { width: 14px; height: 14px; border-radius: 3px; margin-right: 8px; border: 1px solid rgba(0,0,0,0.15); }
+    .count {
+      font-weight: 800;
+      min-width: 28px;
+      text-align: right;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.06);
     }
+
     .sub { font-size: 12px; opacity: 0.75; margin-top: 8px; line-height: 1.2; }
 
     .bottom {
@@ -54,18 +59,37 @@
     input[type="range"] { width: 100%; }
   </style>
 </head>
-
 <body>
   <div id="map"></div>
 
+  <!-- TOP LEFT LEGEND (with live counts) -->
   <div class="legend" id="legend">
-    <div class="title">Demand Colors</div>
+    <div class="title">Demand Colors (this window)</div>
 
-    <div class="row"><div class="left"><span class="swatch" style="background:#00b050;"></span>Green = Best</div></div>
-    <div class="row"><div class="left"><span class="swatch" style="background:#0066ff;"></span>Blue = Medium</div></div>
-    <div class="row"><div class="left"><span class="swatch" style="background:#66ccff;"></span>Sky = Normal</div></div>
-    <div class="row"><div class="left"><span class="swatch" style="background:#ffd400;"></span>Yellow = Below Normal</div></div>
-    <div class="row"><div class="left"><span class="swatch" style="background:#e60000;"></span>Red = Avoid</div></div>
+    <div class="row">
+      <div class="left"><span class="swatch" style="background:#00b050;"></span>Green = Best</div>
+      <div class="count" id="countGreen">–</div>
+    </div>
+
+    <div class="row">
+      <div class="left"><span class="swatch" style="background:#0066ff;"></span>Blue = Medium</div>
+      <div class="count" id="countBlue">–</div>
+    </div>
+
+    <div class="row">
+      <div class="left"><span class="swatch" style="background:#66ccff;"></span>Sky = Normal</div>
+      <div class="count" id="countSky">–</div>
+    </div>
+
+    <div class="row">
+      <div class="left"><span class="swatch" style="background:#ffd400;"></span>Yellow = Below Normal</div>
+      <div class="count" id="countYellow">–</div>
+    </div>
+
+    <div class="row">
+      <div class="left"><span class="swatch" style="background:#e60000;"></span>Red = Avoid</div>
+      <div class="count" id="countRed">–</div>
+    </div>
 
     <div class="sub">
       Colors come from rating (1–100) for the selected 20-minute window.<br/>
@@ -73,6 +97,7 @@
     </div>
   </div>
 
+  <!-- BOTTOM SLIDER -->
   <div class="bottom">
     <div class="time-label" id="timeLabel">Loading…</div>
     <input id="slider" type="range" min="0" max="0" step="1" value="0" />
@@ -83,8 +108,6 @@
     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
     crossorigin=""
   ></script>
-
-  <!-- cache-buster so iPhone actually loads the new JS -->
-  <script src="app.js?v=9"></script>
+  <script src="app.js"></script>
 </body>
 </html>
