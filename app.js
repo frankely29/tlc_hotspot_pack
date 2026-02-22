@@ -148,7 +148,7 @@ function labelHTML(props, zoom) {
   const zoneText = zoom < 13 ? shortenLabel(name, LABEL_MAX_CHARS_MID) : name;
 
   const borough = (props.borough || "").trim();
-  const showBorough = zoom >= BOROUGH_ZOOM_SHOW && borough; // CSS also hides it for z<15
+  const showBorough = zoom >= 15 && borough;
 
   return `
     <div class="zn">${escapeHtml(zoneText)}</div>
@@ -389,18 +389,33 @@ let lastPos = null;
 let lastHeadingDeg = 0;
 let lastMoveTs = 0;
 
-// UI: Auto-center button (we store it here)
-let autoCenterBtnEl = null;
+// Button INSIDE slider box
+const autoCenterBtnEl = document.getElementById("btnAutoCenter");
 
-// IMPORTANT FIX: guard autoCenterBtnEl (so no crash before button exists)
-function disableAutoCenterOnUserPan() {
-  autoCenter = false;
-  if (autoCenterBtnEl) autoCenterBtnEl.textContent = "Auto-center: OFF";
+function syncAutoCenterBtn() {
+  if (!autoCenterBtnEl) return;
+  autoCenterBtnEl.textContent = autoCenter ? "Auto-center ON" : "Auto-center OFF";
+  autoCenterBtnEl.classList.toggle("off", !autoCenter);
 }
 
-// Leaflet events for user navigation
+// IMPORTANT: When user interacts with map, stop auto-center (so you can explore)
+function disableAutoCenterOnUserPan() {
+  if (!autoCenter) return;
+  autoCenter = false;
+  syncAutoCenterBtn();
+}
+
 map.on("dragstart", disableAutoCenterOnUserPan);
 map.on("zoomstart", disableAutoCenterOnUserPan);
+
+if (autoCenterBtnEl) {
+  autoCenterBtnEl.addEventListener("click", () => {
+    autoCenter = !autoCenter;
+    syncAutoCenterBtn();
+    if (autoCenter && userLatLng) map.panTo(userLatLng, { animate: true });
+  });
+  syncAutoCenterBtn(); // initialize text/state
+}
 
 function makeNavIcon() {
   return L.divIcon({
@@ -440,27 +455,6 @@ function computeBearingDeg(from, to) {
   return brng;
 }
 
-// UI: Auto-center button
-function addAutoCenterControl() {
-  const ctrl = L.control({ position: "bottomright" });
-  ctrl.onAdd = function () {
-    const btn = L.DomUtil.create("button", "autoCenterBtn");
-    autoCenterBtnEl = btn;
-    btn.type = "button";
-    btn.textContent = "Auto-center: ON";
-
-    L.DomEvent.disableClickPropagation(btn);
-    L.DomEvent.on(btn, "click", () => {
-      autoCenter = !autoCenter;
-      btn.textContent = autoCenter ? "Auto-center: ON" : "Auto-center: OFF";
-      if (autoCenter && userLatLng) map.panTo(userLatLng, { animate: true });
-    });
-
-    return btn;
-  };
-  ctrl.addTo(map);
-}
-
 function startLocationWatch() {
   if (!("geolocation" in navigator)) {
     if (recommendEl) recommendEl.textContent = "Recommended: location not supported";
@@ -472,8 +466,6 @@ function startLocationWatch() {
     interactive: false,
     zIndexOffset: 9999,
   }).addTo(map);
-
-  addAutoCenterControl();
 
   navigator.geolocation.watchPosition(
     (pos) => {
