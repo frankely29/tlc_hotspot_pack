@@ -1,12 +1,7 @@
-// =========================
-// CONFIG
-// =========================
 const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
 const BIN_MINUTES = 20;
 
-// =========================
-// Helpers
-// =========================
+// ---------- Time helpers ----------
 function parseIsoNoTz(iso) {
   const [d, t] = iso.split("T");
   const [Y, M, D] = d.split("-").map(Number);
@@ -17,7 +12,7 @@ function parseIsoNoTz(iso) {
 function dowMon0FromIso(iso) {
   const { Y, M, D, h, m, s } = parseIsoNoTz(iso);
   const dt = new Date(Date.UTC(Y, M - 1, D, h, m, s));
-  const dowSun0 = dt.getUTCDay(); // 0..6
+  const dowSun0 = dt.getUTCDay();
   return dowSun0 === 0 ? 6 : dowSun0 - 1; // Mon=0..Sun=6
 }
 
@@ -77,18 +72,11 @@ function pickClosestIndex(minutesOfWeekArr, target) {
   return bestIdx;
 }
 
+// ---------- Network ----------
 async function fetchJSON(url) {
-  const res = await fetch(url, {
-    cache: "no-store",
-    mode: "cors",
-  });
-
+  const res = await fetch(url, { cache: "no-store", mode: "cors" });
   const text = await res.text();
-  if (!res.ok) {
-    // show body for debugging (often JSON error)
-    throw new Error(`${res.status} ${res.statusText} @ ${url} :: ${text.slice(0, 200)}`);
-  }
-
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText} @ ${url} :: ${text.slice(0, 200)}`);
   try {
     return JSON.parse(text);
   } catch {
@@ -96,9 +84,20 @@ async function fetchJSON(url) {
   }
 }
 
-// =========================
-// UI + Map
-// =========================
+// ---------- Bucket label ----------
+function prettyBucket(b) {
+  const m = {
+    green: "Highest",
+    purple: "High",
+    blue: "Medium",
+    sky: "Normal",
+    yellow: "Below Normal",
+    red: "Very Low / Avoid",
+  };
+  return m[b] || (b ?? "");
+}
+
+// ---------- Leaflet map ----------
 const slider = document.getElementById("slider");
 const timeLabel = document.getElementById("timeLabel");
 
@@ -113,7 +112,6 @@ let geoLayer = null;
 let timeline = [];
 let minutesOfWeek = [];
 
-// Popup (adds correct timeframe label)
 function buildPopupHTML(props) {
   const rating = props.rating ?? "";
   const bucket = props.bucket ?? "";
@@ -123,7 +121,7 @@ function buildPopupHTML(props) {
   return `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; font-size:13px;">
       <div style="font-weight:800; margin-bottom:4px;">Zone ${props.LocationID}</div>
-      <div><b>Rating:</b> ${rating} (${bucket})</div>
+      <div><b>Rating:</b> ${rating} (${prettyBucket(bucket)})</div>
       <div><b>Pickups (last ${BIN_MINUTES} min):</b> ${pickups}</div>
       <div><b>Avg Driver Pay:</b> $${pay}</div>
     </div>
@@ -132,7 +130,6 @@ function buildPopupHTML(props) {
 
 async function loadFrame(idx) {
   const frame = await fetchJSON(`${RAILWAY_BASE}/frame/${idx}`);
-
   timeLabel.textContent = formatNYCLabel(frame.time);
 
   if (geoLayer) {
@@ -159,10 +156,8 @@ async function loadFrame(idx) {
 
 async function loadTimeline() {
   const t = await fetchJSON(`${RAILWAY_BASE}/timeline`);
-
-  // Accept either {timeline:[...]} OR just [...] (defensive)
   timeline = Array.isArray(t) ? t : (t.timeline || []);
-  if (!timeline.length) throw new Error("Timeline empty (no frames). Run /generate once.");
+  if (!timeline.length) throw new Error("Timeline empty. Run /generate once on Railway.");
 
   minutesOfWeek = timeline.map(minuteOfWeekFromIso);
 
