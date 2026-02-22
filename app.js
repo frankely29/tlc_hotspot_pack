@@ -1,10 +1,10 @@
 const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
 const BIN_MINUTES = 20;
 
-// Label rules (adjust if you want)
-const LABEL_ZOOM_ALL = 12;      // show ALL labels at zoom >= 10
-const LABEL_ZOOM_TOP = 14;      // show ONLY green/purple at zoom 11-12
-const LABEL_MAX_CHARS_MID = 16; // shorten labels at mid zoom
+// Label rules (Fix A: show labels later to avoid clutter when zoomed out)
+const LABEL_ZOOM_TOP = 12;      // show ONLY green/purple at zoom 12–13
+const LABEL_ZOOM_ALL = 14;      // show ALL labels at zoom >= 14
+const LABEL_MAX_CHARS_MID = 14; // shorten labels at mid zoom (optional tuning)
 
 // ---------- Time helpers ----------
 function parseIsoNoTz(iso) {
@@ -190,15 +190,17 @@ function renderFrame(frame) {
       const props = feature.properties || {};
       layer.bindPopup(buildPopupHTML(props), { maxWidth: 300 });
 
-      // labels: zoom-scaled
+      // Zoom-scaled labels (Fix A)
       const bucket = (props.bucket || "").trim();
-      if (!shouldShowLabel(bucket, zoom)) return;
+      const zoomNow = zoom;
+
+      if (!shouldShowLabel(bucket, zoomNow)) return;
 
       const name = (props.zone_name || "").trim();
       if (!name) return;
 
       const labelText =
-        zoom < LABEL_ZOOM_ALL ? shortenLabel(name, LABEL_MAX_CHARS_MID) : name;
+        zoomNow < LABEL_ZOOM_ALL ? shortenLabel(name, LABEL_MAX_CHARS_MID) : name;
 
       layer.bindTooltip(labelText, {
         permanent: true,
@@ -234,7 +236,7 @@ async function loadTimeline() {
   await loadFrame(idx);
 }
 
-// When zoom changes, just re-render current frame (no network)
+// Re-render labels on zoom (no network)
 map.on("zoomend", () => {
   if (currentFrame) renderFrame(currentFrame);
 });
