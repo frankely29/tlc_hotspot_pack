@@ -384,6 +384,7 @@ slider.addEventListener("input", () => {
 const btnCenter = document.getElementById("btnCenter");
 const btnRotate = document.getElementById("btnRotate");
 
+// Start recenter ON by default (user can turn OFF)
 let recenterOn = true;
 let rotateOn = true;
 
@@ -392,35 +393,42 @@ function setBtnState(btn, on) {
   btn.classList.toggle("on", !!on);
 }
 
-if (btnCenter) {
-  btnCenter.addEventListener("click", () => {
-    recenterOn = !recenterOn;
-    btnCenter.textContent = recenterOn ? "Recenter: ON" : "Recenter: OFF";
-    setBtnState(btnCenter, recenterOn);
-    if (recenterOn && userLatLng) stableRecenter(userLatLng, true);
-  });
+function syncRecenterButtonUI() {
+  if (!btnCenter) return;
+  btnCenter.textContent = recenterOn ? "Recenter: ON" : "Recenter: OFF";
   setBtnState(btnCenter, recenterOn);
 }
 
+function syncRotateButtonUI() {
+  if (!btnRotate) return;
+  btnRotate.textContent = rotateOn ? "Rotate: ON" : "Rotate: OFF";
+  setBtnState(btnRotate, rotateOn);
+}
+
+if (btnCenter) {
+  syncRecenterButtonUI();
+  btnCenter.addEventListener("click", () => {
+    recenterOn = !recenterOn;
+    syncRecenterButtonUI();
+    if (recenterOn && userLatLng) stableRecenter(userLatLng, true);
+  });
+}
+
 if (btnRotate) {
+  syncRotateButtonUI();
   btnRotate.addEventListener("click", () => {
     rotateOn = !rotateOn;
-    btnRotate.textContent = rotateOn ? "Rotate: ON" : "Rotate: OFF";
-    setBtnState(btnRotate, rotateOn);
+    syncRotateButtonUI();
     if (!rotateOn) resetMapRotation();
     else applyMapRotationDegrees(lastHeadingDeg);
   });
-  setBtnState(btnRotate, rotateOn);
 }
 
 // If user drags/zooms map, stop recenter (so you can explore)
 function disableRecenterBecauseUserIsExploring() {
   if (!recenterOn) return;
   recenterOn = false;
-  if (btnCenter) {
-    btnCenter.textContent = "Recenter: OFF";
-    setBtnState(btnCenter, false);
-  }
+  syncRecenterButtonUI();
 }
 map.on("dragstart", disableRecenterBecauseUserIsExploring);
 map.on("zoomstart", disableRecenterBecauseUserIsExploring);
@@ -457,7 +465,7 @@ function resetMapRotation() {
 // ---------- Stable recenter logic ----------
 let lastRecenterAt = 0;
 const RECENTER_MIN_INTERVAL_MS = 900;       // don’t spam panTo
-const RECENTER_MAX_DRIFT_MILES = 0.18;      // if you're this far from center, recenter even if updates are weird
+const RECENTER_MAX_DRIFT_MILES = 0.18;      // if drift big, do hard setView (reliable)
 
 function stableRecenter(latlng, force = false) {
   if (!recenterOn || !latlng) return;
@@ -465,13 +473,11 @@ function stableRecenter(latlng, force = false) {
   const now = Date.now();
   if (!force && (now - lastRecenterAt) < RECENTER_MIN_INTERVAL_MS) return;
 
-  // If map is already near you, don't fight with smooth animation
   const center = map.getCenter();
   const drift = haversineMiles({ lat: center.lat, lng: center.lng }, { lat: latlng.lat, lng: latlng.lng });
 
   if (!force && drift < 0.03) return; // already close enough
 
-  // If drift is big, do a hard setView (more reliable across browsers)
   if (drift > RECENTER_MAX_DRIFT_MILES) {
     map.setView(latlng, map.getZoom(), { animate: false });
   } else {
@@ -555,7 +561,7 @@ function startLocationWatch() {
         const dtSec = Math.max(1, (ts - lastPos.ts) / 1000);
         const mph = (dMi / dtSec) * 3600;
 
-        // Tesla-safe: driving direction from movement only
+        // driving direction from movement only (Tesla-safe)
         isMoving = mph >= 2.0;
 
         if (dMi > 0.01) {
@@ -567,7 +573,7 @@ function startLocationWatch() {
 
       lastPos = { lat, lng, ts };
 
-      // Rotate arrow + rotate map layers (works on Tesla if location updates come in)
+      // Rotate arrow + rotate map layers
       setNavRotation(lastHeadingDeg);
       setNavVisual(isMoving);
       applyMapRotationDegrees(lastHeadingDeg);
