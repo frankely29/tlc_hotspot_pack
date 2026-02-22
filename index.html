@@ -89,9 +89,9 @@
 
     /* =========================================================
        ZONE LABELS (tooltips)
-       - Your app.js sets className: `zone-label zXX`
-       - .zn = zone name
-       - .br = borough line (NOW 3x smaller)
+       app.js sets className: `zone-label zXX`
+       .zn = zone name
+       .br = borough line (3x smaller now)
        ========================================================= */
     .zone-label {
       background: transparent;
@@ -124,12 +124,12 @@
       letter-spacing: 0.1px;
     }
 
-    /* Borough line = ALWAYS smaller + lighter */
+    /* Borough line = MUCH smaller + lighter */
     .zone-label .br {
-      font-weight: 800;
-      opacity: 0.75;
-      padding: 1px 7px;      /* slightly tighter */
-      border-radius: 10px;    /* less “pill” feeling */
+      font-weight: 700;
+      opacity: 0.70;
+      padding: 0px 6px;     /* tighter */
+      border-radius: 10px;
     }
 
     /* ---------- Zoom scaling for zone name (zn) ---------- */
@@ -141,32 +141,39 @@
     .zone-label.z15 .zn { font-size: 14px; }
 
     /* ---------- Zoom scaling for borough line (br) ----------
-       Borough is only shown at zoom >= 14 by app.js.
-       We keep it hidden for z10-12, and make it ~3x smaller when shown.
+       3x smaller than before.
+       Borough shows only when zoom >= 14 (app.js), so start tiny.
     */
-    .zone-label.z10 .br { font-size: 0px;  padding: 0; border: 0; }
-    .zone-label.z11 .br { font-size: 0px;  padding: 0; border: 0; }
-    .zone-label.z12 .br { font-size: 0px;  padding: 0; border: 0; }
+    .zone-label.z10 .br { font-size: 0px; padding: 0; border: 0; }
+    .zone-label.z11 .br { font-size: 0px; padding: 0; border: 0; }
+    .zone-label.z12 .br { font-size: 0px; padding: 0; border: 0; }
+    .zone-label.z13 .br { font-size: 0px; padding: 0; border: 0; }
 
-    /* If you ever show borough at z13 in the future, keep it tiny */
-    .zone-label.z13 .br { font-size: 3px; }
-
-    /* Borough starts showing at zoom >= 14 (your app.js) */
     .zone-label.z14 .br { font-size: 3px; }
     .zone-label.z15 .br { font-size: 4px; }
 
-    /* Make labels less “thick” on phones */
+    /* Location button (top-right) */
+    .loc-btn{
+      background: rgba(255,255,255,0.92);
+      border: 1px solid rgba(0,0,0,0.15);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 18px;
+      font-weight: 800;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.15);
+      cursor: pointer;
+    }
+    .loc-btn:active{ transform: scale(0.98); }
+
+    /* Make UI less “thick” on phones */
     @media (max-width: 420px) {
       .legend { max-width: 280px; }
       .legend .row { font-size: 14px; }
       .timeLabel { font-size: 22px; }
 
       .zone-label .zn, .zone-label .br { max-width: 180px; }
-
-      /* keep borough 3x smaller on mobile too */
-      .zone-label.z13 .br { font-size: 3px; }
-      .zone-label.z14 .br { font-size: 3px; }
-      .zone-label.z15 .br { font-size: 4px; }
+      .zone-label.z14 .br { font-size: 2px; }
+      .zone-label.z15 .br { font-size: 3px; }
     }
   </style>
 </head>
@@ -194,7 +201,6 @@
     <input id="slider" type="range" min="0" max="0" value="0" step="1" />
   </div>
 
-  <!-- Your frontend logic -->
   <script src="./app.js"></script>
 </body>
 </html>
