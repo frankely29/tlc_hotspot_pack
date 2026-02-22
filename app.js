@@ -78,32 +78,30 @@ function pickClosestIndex(minutesOfWeekArr, target) {
 }
 
 async function fetchJSON(url) {
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
-  return await res.json();
+  const res = await fetch(url, {
+    cache: "no-store",
+    mode: "cors",
+  });
+
+  const text = await res.text();
+  if (!res.ok) {
+    // show body for debugging (often JSON error)
+    throw new Error(`${res.status} ${res.statusText} @ ${url} :: ${text.slice(0, 200)}`);
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`Invalid JSON @ ${url} :: ${text.slice(0, 200)}`);
+  }
 }
 
 // =========================
-// Legend count UI
+// UI + Map
 // =========================
-const elGreen = document.getElementById("countGreen");
-const elBlue = document.getElementById("countBlue");
-const elSky = document.getElementById("countSky");
-const elYellow = document.getElementById("countYellow");
-const elRed = document.getElementById("countRed");
+const slider = document.getElementById("slider");
+const timeLabel = document.getElementById("timeLabel");
 
-function setLegendCounts(summary) {
-  // summary is like {green, blue, sky, yellow, red}
-  elGreen.textContent = summary?.green ?? 0;
-  elBlue.textContent = summary?.blue ?? 0;
-  elSky.textContent = summary?.sky ?? 0;
-  elYellow.textContent = summary?.yellow ?? 0;
-  elRed.textContent = summary?.red ?? 0;
-}
-
-// =========================
-// Map init
-// =========================
 const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 11);
 
 L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
@@ -112,16 +110,10 @@ L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
 }).addTo(map);
 
 let geoLayer = null;
-
-// Slider UI
-const slider = document.getElementById("slider");
-const timeLabel = document.getElementById("timeLabel");
-
-// Data
 let timeline = [];
 let minutesOfWeek = [];
 
-// Popup (no ETA, fully factual)
+// Popup (adds correct timeframe label)
 function buildPopupHTML(props) {
   const rating = props.rating ?? "";
   const bucket = props.bucket ?? "";
@@ -132,7 +124,7 @@ function buildPopupHTML(props) {
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; font-size:13px;">
       <div style="font-weight:800; margin-bottom:4px;">Zone ${props.LocationID}</div>
       <div><b>Rating:</b> ${rating} (${bucket})</div>
-      <div><b>Pickups:</b> ${pickups}</div>
+      <div><b>Pickups (last ${BIN_MINUTES} min):</b> ${pickups}</div>
       <div><b>Avg Driver Pay:</b> $${pay}</div>
     </div>
   `;
@@ -141,11 +133,8 @@ function buildPopupHTML(props) {
 async function loadFrame(idx) {
   const frame = await fetchJSON(`${RAILWAY_BASE}/frame/${idx}`);
 
-  // top left + bottom time label
   timeLabel.textContent = formatNYCLabel(frame.time);
-  setLegendCounts(frame.summary);
 
-  // redraw polygons
   if (geoLayer) {
     geoLayer.remove();
     geoLayer = null;
@@ -164,14 +153,16 @@ async function loadFrame(idx) {
     },
     onEachFeature: (feature, layer) => {
       layer.bindPopup(buildPopupHTML(feature.properties || {}), { maxWidth: 280 });
-    }
+    },
   }).addTo(map);
 }
 
 async function loadTimeline() {
   const t = await fetchJSON(`${RAILWAY_BASE}/timeline`);
-  timeline = t.timeline || [];
-  if (!timeline.length) throw new Error("Timeline empty.");
+
+  // Accept either {timeline:[...]} OR just [...] (defensive)
+  timeline = Array.isArray(t) ? t : (t.timeline || []);
+  if (!timeline.length) throw new Error("Timeline empty (no frames). Run /generate once.");
 
   minutesOfWeek = timeline.map(minuteOfWeekFromIso);
 
@@ -179,7 +170,6 @@ async function loadTimeline() {
   slider.max = String(timeline.length - 1);
   slider.step = "1";
 
-  // Init to closest NYC now window
   const nowMinWeek = getNowNYCMinuteOfWeekRounded();
   const idx = pickClosestIndex(minutesOfWeek, nowMinWeek);
   slider.value = String(idx);
@@ -198,6 +188,5 @@ slider.addEventListener("input", () => {
 // Boot
 loadTimeline().catch((err) => {
   console.error(err);
-  timeLabel.textContent = "Error loading timeline. Check Railway /timeline.";
-  setLegendCounts({ green: 0, blue: 0, sky: 0, yellow: 0, red: 0 });
+  timeLabel.textContent = `Error loading timeline: ${err.message}`;
 });
