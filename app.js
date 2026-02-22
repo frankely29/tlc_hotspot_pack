@@ -2,18 +2,19 @@ const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
 const BIN_MINUTES = 20;
 
 /**
- * Label policy (less zoom needed, but declutter keeps it readable)
- * - Start showing labels earlier
- * - Only show borough line when fairly zoomed in
+ * ✅ Label policy: show important zones sooner, still decluttered.
  */
-const LABEL_ZOOM_START = 9;      // start showing some labels
-const LABEL_ZOOM_ALL = 11;       // allow all buckets (still filtered by declutter)
+const LABEL_ZOOM_START = 8;      // start showing labels sooner
+const LABEL_ZOOM_ALL = 11;       // allow all buckets (still decluttered)
 const BOROUGH_ZOOM_SHOW = 13;    // show borough line only when zoomed in
-const LABEL_MAX_CHARS_LOW = 12;  // shorten at low zoom
-const LABEL_MAX_CHARS_MID = 16;  // shorten at mid zoom
+const LABEL_MAX_CHARS_LOW = 11;  // shorten at low zoom
+const LABEL_MAX_CHARS_MID = 15;  // shorten at mid zoom
 
-// Declutter spacing (in pixels). Bigger = fewer labels, less overlap.
-const DECLUTTER_PADDING = 4;
+/**
+ * Declutter: base padding.
+ * We'll apply smaller padding for higher-demand buckets (so they can fit more easily).
+ */
+const DECLUTTER_PADDING_BASE = 5;
 
 // ---------- Time helpers ----------
 function parseIsoNoTz(iso) {
@@ -59,6 +60,7 @@ function getNowNYCMinuteOfWeekRounded() {
 
   const hour = Number(map.hour);
   const minute = Number(map.minute);
+
   const total = dow_m * 1440 + hour * 60 + minute;
   return Math.floor(total / BIN_MINUTES) * BIN_MINUTES;
 }
@@ -103,18 +105,24 @@ function prettyBucket(b) {
   };
   return m[b] || (b ?? "");
 }
-
-// Higher score = higher label priority
 function bucketPriority(bucket) {
   switch (bucket) {
-    case "green": return 6;
-    case "purple": return 5;
-    case "blue": return 4;
-    case "sky": return 3;
-    case "yellow": return 2;
-    case "red": return 1;
+    case "green": return 600;
+    case "purple": return 500;
+    case "blue": return 400;
+    case "sky": return 300;
+    case "yellow": return 200;
+    case "red": return 100;
     default: return 0;
   }
+}
+
+// ✅ tighter padding for important buckets so they appear more often
+function declutterPaddingForBucket(bucket) {
+  if (bucket === "green" || bucket === "purple") return 2;
+  if (bucket === "blue") return 3;
+  if (bucket === "sky") return 4;
+  return DECLUTTER_PADDING_BASE; // yellow/red
 }
 
 // ---------- Text / HTML ----------
@@ -133,21 +141,21 @@ function shortenLabel(text, maxChars) {
   return t.slice(0, maxChars - 1) + "…";
 }
 function zoomClass(zoom) {
-  // We defined CSS classes z9..z14
-  const z = Math.max(9, Math.min(14, Math.round(zoom)));
+  const z = Math.max(8, Math.min(14, Math.round(zoom)));
   return `z${z}`;
 }
 
 /**
- * Decide if a bucket can show labels at this zoom.
- * - At low zoom show only higher demand first (green/purple/blue)
- * - At mid zoom allow sky too
- * - At higher zoom allow all
+ * ✅ Bucket visibility by zoom:
+ * - z<8: none
+ * - z8-9: green/purple/blue ONLY
+ * - z10: add sky
+ * - z11+: allow all (still declutter)
  */
 function bucketAllowedAtZoom(bucket, zoom) {
   if (zoom < LABEL_ZOOM_START) return false;
   if (zoom < 10) return bucket === "green" || bucket === "purple" || bucket === "blue";
-  if (zoom < LABEL_ZOOM_ALL) return bucket !== "red"; // allow most, still skip red until a bit closer
+  if (zoom < LABEL_ZOOM_ALL) return bucket !== "red"; // allow most, skip red
   return true;
 }
 
@@ -174,41 +182,27 @@ function labelHTML(props, zoom) {
 
 // ---------- Label placement (inside polygon) ----------
 function interiorLabelLatLng(feature) {
-  // Use Turf polylabel to pick an interior point that is inside the polygon.
-  // Works for Polygon / MultiPolygon.
   try {
     const pt = turf.polylabel(feature, { precision: 1.0 });
     const coords = pt?.geometry?.coordinates;
-    if (coords && coords.length === 2) {
-      return L.latLng(coords[1], coords[0]);
-    }
+    if (coords && coords.length === 2) return L.latLng(coords[1], coords[0]);
   } catch {}
-  // Fallback: center of mass
   try {
     const pt2 = turf.centerOfMass(feature);
     const c2 = pt2?.geometry?.coordinates;
-    if (c2 && c2.length === 2) {
-      return L.latLng(c2[1], c2[0]);
-    }
+    if (c2 && c2.length === 2) return L.latLng(c2[1], c2[0]);
   } catch {}
   return null;
 }
 
-// Estimate label box size in screen px (good enough for declutter)
 function estimateLabelBox(zoom, zoneText, showBorough) {
-  // Char width heuristic depends on zoom class
-  const z = Math.max(9, Math.min(14, Math.round(zoom)));
-
-  // zone font grows with zoom, so width grows a bit
-  const charW = (z <= 10) ? 6.3 : (z <= 12 ? 6.7 : 7.1);
-  const padW = 18; // bubble horizontal padding
-  const w = Math.min(260, Math.max(60, zoneText.length * charW + padW));
-
-  // Height: zone line + optional borough
+  const z = Math.max(8, Math.min(14, Math.round(zoom)));
+  const charW = (z <= 10) ? 6.0 : (z <= 12 ? 6.5 : 7.0);
+  const padW = 18;
+  const w = Math.min(240, Math.max(56, zoneText.length * charW + padW));
   const h = showBorough ? (z <= 10 ? 30 : 34) : (z <= 10 ? 20 : 22);
   return { w, h };
 }
-
 function rectsOverlap(a, b) {
   return !(a.x2 < b.x1 || a.x1 > b.x2 || a.y2 < b.y1 || a.y1 > b.y2);
 }
@@ -224,13 +218,12 @@ L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
   maxZoom: 19,
 }).addTo(map);
 
-let geoLayer = null;       // polygons
-let labelLayer = null;     // decluttered label markers
+let geoLayer = null;
+let labelLayer = null;
 let timeline = [];
 let minutesOfWeek = [];
 let currentFrame = null;
 
-// Popup (unchanged)
 function buildPopupHTML(props) {
   const zoneName = (props.zone_name || "").trim();
   const borough = (props.borough || "").trim();
@@ -281,7 +274,6 @@ function renderLabels(frame) {
 
   labelLayer = L.layerGroup().addTo(map);
 
-  // Build candidate labels with priority
   const candidates = [];
   for (const f of (frame.polygons?.features || [])) {
     const props = f.properties || {};
@@ -290,33 +282,23 @@ function renderLabels(frame) {
     if (!name) continue;
     if (!bucketAllowedAtZoom(bucket, zoomNow)) continue;
 
-    const borough = (props.borough || "").trim();
-    const showBorough = zoomNow >= BOROUGH_ZOOM_SHOW && !!borough;
-
-    // Determine label text (same shortening used in HTML)
     let maxChars = LABEL_MAX_CHARS_MID;
     if (zoomNow <= 10) maxChars = LABEL_MAX_CHARS_LOW;
     const zoneText = shortenLabel(name, maxChars);
 
+    const borough = (props.borough || "").trim();
+    const showBorough = zoomNow >= BOROUGH_ZOOM_SHOW && !!borough;
+
     const latlng = interiorLabelLatLng(f);
     if (!latlng) continue;
 
-    // Higher priority first; tie-break by pickups
-    const pr = bucketPriority(bucket);
     const pickups = Number(props.pickups || 0);
+    const pr = bucketPriority(bucket);
 
-    candidates.push({
-      feature: f,
-      props,
-      bucket,
-      pr,
-      pickups,
-      zoneText,
-      showBorough,
-      latlng
-    });
+    candidates.push({ props, bucket, pickups, pr, zoneText, showBorough, latlng });
   }
 
+  // ✅ Important: sort so top-demand wins collision wars
   candidates.sort((a, b) => {
     if (b.pr !== a.pr) return b.pr - a.pr;
     return b.pickups - a.pickups;
@@ -328,17 +310,18 @@ function renderLabels(frame) {
     const html = labelHTML(c.props, zoomNow);
     if (!html) continue;
 
+    const pad = declutterPaddingForBucket(c.bucket);
+
     const pt = map.latLngToContainerPoint(c.latlng);
     const box = estimateLabelBox(zoomNow, c.zoneText, c.showBorough);
 
     const rect = {
-      x1: pt.x - box.w / 2 - DECLUTTER_PADDING,
-      y1: pt.y - box.h / 2 - DECLUTTER_PADDING,
-      x2: pt.x + box.w / 2 + DECLUTTER_PADDING,
-      y2: pt.y + box.h / 2 + DECLUTTER_PADDING,
+      x1: pt.x - box.w / 2 - pad,
+      y1: pt.y - box.h / 2 - pad,
+      x2: pt.x + box.w / 2 + pad,
+      y2: pt.y + box.h / 2 + pad,
     };
 
-    // Skip if overlapping any existing label
     let ok = true;
     for (const r of occupied) {
       if (rectsOverlap(rect, r)) { ok = false; break; }
@@ -350,7 +333,7 @@ function renderLabels(frame) {
     const icon = L.divIcon({
       className: `zone-label ${zClass} bucket-${c.bucket}`,
       html,
-      iconSize: null, // allow auto
+      iconSize: null,
     });
 
     L.marker(c.latlng, { icon, interactive: false }).addTo(labelLayer);
@@ -389,15 +372,12 @@ async function loadTimeline() {
   await loadFrame(idx);
 }
 
-// Re-render only labels on zoom (no network)
 map.on("zoomend", () => {
   if (!currentFrame) return;
-  // Keep polygons, just rebuild labels (faster + no flicker)
   if (labelLayer) { labelLayer.remove(); labelLayer = null; }
   renderLabels(currentFrame);
 });
 
-// Debounced slider
 let sliderDebounce = null;
 slider.addEventListener("input", () => {
   const idx = Number(slider.value);
@@ -405,7 +385,6 @@ slider.addEventListener("input", () => {
   sliderDebounce = setTimeout(() => loadFrame(idx).catch(console.error), 80);
 });
 
-// Boot
 loadTimeline().catch((err) => {
   console.error(err);
   timeLabel.textContent = `Error loading timeline: ${err.message}`;
