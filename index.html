@@ -12,138 +12,157 @@
     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
     crossorigin=""
   />
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
 
   <style>
     html, body { height: 100%; margin: 0; }
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    #map { height: 100vh; width: 100vw; }
 
-    /* Map fills screen */
-    #map { position: fixed; inset: 0; }
-
-    /* --- Legend (top-left) ---  (smaller, less blocking) */
+    /* Legend box (top-left) */
     .legend {
       position: absolute;
       top: 12px;
       left: 12px;
       z-index: 1000;
       background: rgba(255,255,255,0.92);
-      backdrop-filter: blur(6px);
+      padding: 12px 12px 10px 12px;
       border-radius: 12px;
-      padding: 10px 10px;
-      box-shadow: 0 10px 28px rgba(0,0,0,0.18);
-      max-width: 220px;           /* smaller */
+      box-shadow: 0 6px 18px rgba(0,0,0,0.15);
+      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
+      max-width: 320px;
     }
     .legend h3 {
       margin: 0 0 8px 0;
-      font-size: 18px;            /* smaller */
-      font-weight: 900;
-      letter-spacing: -0.2px;
+      font-size: 16px;
+      font-weight: 800;
     }
     .legend .row {
-      display: grid;
-      grid-template-columns: 18px 1fr;
-      gap: 8px;
+      display: flex;
       align-items: center;
+      gap: 10px;
       margin: 6px 0;
-      font-size: 14px;            /* smaller */
+      font-size: 15px;
       font-weight: 700;
     }
-    .swatch {
+    .legend .swatch {
       width: 18px;
       height: 18px;
       border-radius: 4px;
-      border: 2px solid rgba(0,0,0,0.12);
+      border: 1px solid rgba(0,0,0,0.15);
+      flex: 0 0 18px;
     }
-    .legend .note {
-      margin-top: 8px;
-      font-size: 13px;            /* smaller */
+    .legend .sub {
+      margin-top: 10px;
+      font-size: 13px;
+      opacity: 0.85;
       line-height: 1.25;
-      font-weight: 650;
-      opacity: 0.9;
+      font-weight: 600;
     }
 
-    /* --- Bottom control bar --- */
-    .bottom {
+    /* Bottom slider bar */
+    .sliderWrap {
       position: absolute;
-      left: 10px;
-      right: 10px;
-      bottom: 10px;
+      left: 12px;
+      right: 12px;
+      bottom: 12px;
       z-index: 1000;
       background: rgba(255,255,255,0.92);
-      backdrop-filter: blur(10px);
-      border-radius: 18px;
-      padding: 14px 14px 12px;
-      box-shadow: 0 14px 38px rgba(0,0,0,0.18);
+      border-radius: 16px;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.15);
+      padding: 12px 14px 14px 14px;
+      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
     }
-    #timeLabel {
-      font-size: 44px;
-      font-weight: 950;
-      letter-spacing: -1px;
-      margin: 0 0 10px 0;
-      line-height: 1;
+    .timeLabel {
+      font-size: 26px;
+      font-weight: 900;
+      margin: 0 0 8px 0;
     }
-    #slider {
+    input[type="range"] {
       width: 100%;
-      height: 24px;
-      accent-color: #3b82f6;
+      height: 28px;
+      margin: 0;
     }
 
-    /* Leaflet popup font match */
-    .leaflet-popup-content-wrapper { border-radius: 12px; }
-    .leaflet-popup-content { margin: 12px 14px; }
+    /* =========================================================
+       ZONE LABELS (tooltips)
+       - Your app.js sets className: `zone-label zXX`
+       - .zn = zone name
+       - .br = borough line (we make it SMALLER + scales with zoom)
+       ========================================================= */
+    .zone-label {
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      color: #111;
+      text-align: center;
+      pointer-events: none;
+    }
 
-    /* ---------- Zone labels (flat, inside polygons) ---------- */
-    .zone-label-flat{
-      pointer-events:none;
-      background:transparent !important;
-      border:none !important;
-      box-shadow:none !important;
-      padding:0 !important;
-      margin:0 !important;
-      white-space:nowrap;
-      transform: translate3d(0,0,0);
+    /* Base pill styling for BOTH lines */
+    .zone-label .zn,
+    .zone-label .br {
+      display: inline-block;
+      background: rgba(255,255,255,0.86);
+      border: 1px solid rgba(0,0,0,0.18);
+      border-radius: 999px;
+      padding: 2px 8px;
+      margin: 1px 0;
+      white-space: nowrap;
+      max-width: 220px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.08);
     }
-    .zone-label-flat .zn{
-      font-weight:900;
-      color: rgba(0,0,0,0.82);
-      text-align:center;
-      text-shadow:
-        -2px -2px 0 rgba(255,255,255,0.95),
-         2px -2px 0 rgba(255,255,255,0.95),
-        -2px  2px 0 rgba(255,255,255,0.95),
-         2px  2px 0 rgba(255,255,255,0.95),
-         0px  0px 8px rgba(255,255,255,0.95);
+
+    /* Zone name = stronger */
+    .zone-label .zn {
+      font-weight: 900;
+      letter-spacing: 0.1px;
     }
-    .zone-label-flat .br{
-      font-weight:800;
-      font-size: 11px;
+
+    /* Borough line = ALWAYS smaller + lighter */
+    .zone-label .br {
+      font-weight: 800;
       opacity: 0.75;
-      margin-top: -2px;
-      text-align:center;
-      text-shadow:
-        -2px -2px 0 rgba(255,255,255,0.95),
-         2px -2px 0 rgba(255,255,255,0.95),
-        -2px  2px 0 rgba(255,255,255,0.95),
-         2px  2px 0 rgba(255,255,255,0.95);
+      padding: 1px 7px;      /* slightly tighter */
+      border-radius: 10px;    /* less “pill” feeling */
     }
 
-    /* Zoom sizes (smaller when zoomed out) */
-    .z7  .zn{font-size:11px}
-    .z8  .zn{font-size:12px}
-    .z9  .zn{font-size:13px}
-    .z10 .zn{font-size:14px}
-    .z11 .zn{font-size:15px}
-    .z12 .zn{font-size:16px}
-    .z13 .zn{font-size:17px}
-    .z14 .zn{font-size:18px}
+    /* ---------- Zoom scaling for zone name (zn) ---------- */
+    .zone-label.z10 .zn { font-size: 9px;  }
+    .zone-label.z11 .zn { font-size: 10px; }
+    .zone-label.z12 .zn { font-size: 11px; }
+    .zone-label.z13 .zn { font-size: 12px; }
+    .zone-label.z14 .zn { font-size: 13px; }
+    .zone-label.z15 .zn { font-size: 14px; }
 
-    /* Mobile tweaks */
-    @media (max-width: 520px){
-      .legend { max-width: 205px; padding: 9px 9px; }
-      .legend h3 { font-size: 17px; }
-      .legend .row { font-size: 13px; }
-      .legend .note { font-size: 12px; }
-      #timeLabel { font-size: 40px; }
+    /* ---------- Zoom scaling for borough line (br) ----------
+       IMPORTANT: This is what fixes your complaint.
+       Much smaller at medium/zoomed-out, grows a bit when zoomed in.
+    */
+    .zone-label.z10 .br { font-size: 0px;  padding: 0; border: 0; } /* borough never shown at z10 anyway */
+    .zone-label.z11 .br { font-size: 0px;  padding: 0; border: 0; }
+    .zone-label.z12 .br { font-size: 0px;  padding: 0; border: 0; }
+
+    /* Borough starts showing at zoom >= 13 (your app.js), so start tiny */
+    .zone-label.z13 .br { font-size: 8px;  }
+    .zone-label.z14 .br { font-size: 9px;  }
+    .zone-label.z15 .br { font-size: 10px; }
+
+    /* Make labels less “thick” on phones */
+    @media (max-width: 420px) {
+      .legend { max-width: 280px; }
+      .legend .row { font-size: 14px; }
+      .timeLabel { font-size: 22px; }
+
+      .zone-label .zn, .zone-label .br { max-width: 180px; }
+      .zone-label.z13 .br { font-size: 7px; }
+      .zone-label.z14 .br { font-size: 8px; }
+      .zone-label.z15 .br { font-size: 9px; }
     }
   </style>
 </head>
@@ -151,60 +170,27 @@
 <body>
   <div id="map"></div>
 
-  <!-- Legend -->
   <div class="legend" aria-label="Demand legend">
     <h3>Demand Colors</h3>
+    <div class="row"><span class="swatch" style="background:#00b050"></span> Green = Highest</div>
+    <div class="row"><span class="swatch" style="background:#8000ff"></span> Purple = High</div>
+    <div class="row"><span class="swatch" style="background:#0066ff"></span> Blue = Medium</div>
+    <div class="row"><span class="swatch" style="background:#66ccff"></span> Sky = Normal</div>
+    <div class="row"><span class="swatch" style="background:#ffd400"></span> Yellow = Below Normal</div>
+    <div class="row"><span class="swatch" style="background:#e60000"></span> Red = Very Low / Avoid</div>
 
-    <div class="row">
-      <div class="swatch" style="background:#00b050"></div>
-      <div>Green = Highest</div>
-    </div>
-    <div class="row">
-      <div class="swatch" style="background:#8000ff"></div>
-      <div>Purple = High</div>
-    </div>
-    <div class="row">
-      <div class="swatch" style="background:#0066ff"></div>
-      <div>Blue = Medium</div>
-    </div>
-    <div class="row">
-      <div class="swatch" style="background:#66ccff"></div>
-      <div>Sky = Normal</div>
-    </div>
-    <div class="row">
-      <div class="swatch" style="background:#ffd400"></div>
-      <div>Yellow = Below Normal</div>
-    </div>
-    <div class="row">
-      <div class="swatch" style="background:#e60000"></div>
-      <div>Red = Very Low / Avoid</div>
-    </div>
-
-    <div class="note">
-      Rating (1–100) for the selected 20-min window.<br/>
-      Time is NYC.
+    <div class="sub">
+      Colors come from rating (1–100) for the selected 20-minute window.<br/>
+      Time label is NYC time.
     </div>
   </div>
 
-  <!-- Bottom slider -->
-  <div class="bottom">
-    <div id="timeLabel">Loading…</div>
-    <input id="slider" type="range" min="0" max="0" step="1" value="0" />
+  <div class="sliderWrap">
+    <div id="timeLabel" class="timeLabel">Loading…</div>
+    <input id="slider" type="range" min="0" max="0" value="0" step="1" />
   </div>
 
-  <!-- Scripts -->
-  <script
-    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-    crossorigin=""
-  ></script>
-
-  <!-- Optional helper (fallback inside-point) -->
-  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
-  <!-- Primary inside-point algorithm -->
-  <script src="https://unpkg.com/polylabel@1.1.0/polylabel.js"></script>
-
-  <!-- Your app -->
-  <script src="./app.js?v=1"></script>
+  <!-- Your frontend logic -->
+  <script src="./app.js"></script>
 </body>
 </html>
