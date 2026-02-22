@@ -8,7 +8,6 @@
   <link
     rel="stylesheet"
     href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
     crossorigin=""
   />
 
@@ -16,6 +15,7 @@
     html, body { height: 100%; margin: 0; }
     #map { height: 100%; width: 100%; }
 
+    /* ---------- LEGEND ---------- */
     .legend {
       position: absolute;
       top: 12px;
@@ -29,15 +29,26 @@
       box-shadow: 0 2px 12px rgba(0,0,0,0.15);
       max-width: 320px;
     }
+
     .legend .title { font-weight: 800; margin-bottom: 6px; }
     .legend .row { display: flex; align-items: center; margin: 4px 0; }
-    .legend .left { display: flex; align-items: center; }
-    .swatch {
-      width: 14px; height: 14px; border-radius: 3px;
-      margin-right: 8px; border: 1px solid rgba(0,0,0,0.15);
-    }
-    .sub { font-size: 12px; opacity: 0.75; margin-top: 8px; line-height: 1.2; }
 
+    .swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      margin-right: 8px;
+      border: 1px solid rgba(0,0,0,0.15);
+    }
+
+    .sub {
+      font-size: 12px;
+      opacity: 0.75;
+      margin-top: 8px;
+      line-height: 1.2;
+    }
+
+    /* ---------- BOTTOM SLIDER ---------- */
     .bottom {
       position: absolute;
       left: 12px;
@@ -50,10 +61,16 @@
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
       box-shadow: 0 2px 12px rgba(0,0,0,0.15);
     }
-    .time-label { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
+
+    .time-label {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
     input[type="range"] { width: 100%; }
 
-    /* ZONE LABEL TOOLTIP (two-line: zone + borough) */
+    /* ---------- ZONE LABEL TOOLTIP ---------- */
     .zone-label {
       background: rgba(255,255,255,0.85);
       border: 0;
@@ -64,22 +81,34 @@
       white-space: nowrap;
     }
 
-    .zone-label .zn { font-weight: 800; line-height: 1.05; }
-    .zone-label .br { font-weight: 700; opacity: 0.75; line-height: 1.05; }
+    .zone-label .zn {
+      font-weight: 800;
+      line-height: 1.05;
+    }
 
-    /* Font scaling by zoom bucket */
-    .zone-label.z10 .zn { font-size: 10px; }
+    .zone-label .br {
+      font-weight: 700;
+      opacity: 0.6;   /* lighter borough text */
+      line-height: 1.05;
+    }
+
+    /* ---------- ZOOM SCALING ---------- */
+
+    /* Very zoomed out */
+    .zone-label.z10 .zn { font-size: 9px; }
     .zone-label.z10 .br { font-size: 7px; }
 
     .zone-label.z11 .zn { font-size: 10px; }
     .zone-label.z11 .br { font-size: 8px; }
 
+    /* Medium zoom */
     .zone-label.z12 .zn { font-size: 11px; }
     .zone-label.z12 .br { font-size: 9px; }
 
     .zone-label.z13 .zn { font-size: 12px; }
     .zone-label.z13 .br { font-size: 10px; }
 
+    /* Closer zoom */
     .zone-label.z14 .zn { font-size: 13px; }
     .zone-label.z14 .br { font-size: 11px; }
 
@@ -89,17 +118,19 @@
 </head>
 
 <body>
+
   <div id="map"></div>
 
-  <div class="legend" id="legend">
+  <!-- ---------- LEGEND ---------- -->
+  <div class="legend">
     <div class="title">Demand Colors</div>
 
-    <div class="row"><div class="left"><span class="swatch" style="background:#00b050;"></span>Green = Highest</div></div>
-    <div class="row"><div class="left"><span class="swatch" style="background:#8000ff;"></span>Purple = High</div></div>
-    <div class="row"><div class="left"><span class="swatch" style="background:#0066ff;"></span>Blue = Medium</div></div>
-    <div class="row"><div class="left"><span class="swatch" style="background:#66ccff;"></span>Sky = Normal</div></div>
-    <div class="row"><div class="left"><span class="swatch" style="background:#ffd400;"></span>Yellow = Below Normal</div></div>
-    <div class="row"><div class="left"><span class="swatch" style="background:#e60000;"></span>Red = Very Low / Avoid</div></div>
+    <div class="row"><span class="swatch" style="background:#00b050;"></span>Green = Highest</div>
+    <div class="row"><span class="swatch" style="background:#8000ff;"></span>Purple = High</div>
+    <div class="row"><span class="swatch" style="background:#0066ff;"></span>Blue = Medium</div>
+    <div class="row"><span class="swatch" style="background:#66ccff;"></span>Sky = Normal</div>
+    <div class="row"><span class="swatch" style="background:#ffd400;"></span>Yellow = Below Normal</div>
+    <div class="row"><span class="swatch" style="background:#e60000;"></span>Red = Very Low / Avoid</div>
 
     <div class="sub">
       Colors come from rating (1–100) for the selected 20-minute window.<br/>
@@ -107,18 +138,14 @@
     </div>
   </div>
 
+  <!-- ---------- TIME SLIDER ---------- -->
   <div class="bottom">
     <div class="time-label" id="timeLabel">Loading…</div>
     <input id="slider" type="range" min="0" max="0" step="1" value="0" />
   </div>
 
-  <script
-    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-    crossorigin=""
-  ></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="app.js?v=20"></script>
 
-  <!-- cache-buster: bump v when you change app.js -->
-  <script src="app.js?v=12"></script>
 </body>
 </html>
