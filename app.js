@@ -1,6 +1,11 @@
 const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
 const BIN_MINUTES = 20;
 
+// Label rules (adjust if you want)
+const LABEL_ZOOM_ALL = 13;      // show ALL labels at zoom >= 13
+const LABEL_ZOOM_TOP = 11;      // show ONLY green/purple at zoom 11-12
+const LABEL_MAX_CHARS_MID = 16; // shorten labels at mid zoom
+
 // ---------- Time helpers ----------
 function parseIsoNoTz(iso) {
   const [d, t] = iso.split("T");
@@ -97,6 +102,27 @@ function prettyBucket(b) {
   return m[b] || (b ?? "");
 }
 
+// ---------- Label formatting ----------
+function shortenLabel(text, maxChars) {
+  const t = (text || "").trim();
+  if (!t) return "";
+  if (t.length <= maxChars) return t;
+  return t.slice(0, maxChars - 1) + "…";
+}
+
+function shouldShowLabel(bucket, zoom) {
+  // zoomed out: no labels
+  if (zoom < LABEL_ZOOM_TOP) return false;
+
+  // mid zoom: show only best zones to avoid clutter
+  if (zoom < LABEL_ZOOM_ALL) {
+    return bucket === "green" || bucket === "purple";
+  }
+
+  // zoomed in: show all
+  return true;
+}
+
 // ---------- Leaflet map ----------
 const slider = document.getElementById("slider");
 const timeLabel = document.getElementById("timeLabel");
@@ -111,8 +137,9 @@ L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
 let geoLayer = null;
 let timeline = [];
 let minutesOfWeek = [];
+let currentFrame = null;
 
-// Popup: shows Zone Name + Borough + accurate timeframe label
+// Popup
 function buildPopupHTML(props) {
   const zid = props.LocationID ?? "";
   const zoneName = (props.zone_name || "").trim();
@@ -137,14 +164,16 @@ function buildPopupHTML(props) {
   `;
 }
 
-async function loadFrame(idx) {
-  const frame = await fetchJSON(`${RAILWAY_BASE}/frame/${idx}`);
+function renderFrame(frame) {
+  currentFrame = frame;
   timeLabel.textContent = formatNYCLabel(frame.time);
 
   if (geoLayer) {
     geoLayer.remove();
     geoLayer = null;
   }
+
+  const zoom = map.getZoom();
 
   geoLayer = L.geoJSON(frame.polygons, {
     style: (feature) => {
@@ -159,13 +188,17 @@ async function loadFrame(idx) {
     },
     onEachFeature: (feature, layer) => {
       const props = feature.properties || {};
-
-      // 1) Popup on tap/click
       layer.bindPopup(buildPopupHTML(props), { maxWidth: 300 });
 
-      // 2) ALWAYS-ON label on top of each zone
+      // labels: zoom-scaled
+      const bucket = (props.bucket || "").trim();
+      if (!shouldShowLabel(bucket, zoom)) return;
+
       const name = (props.zone_name || "").trim();
-      const labelText = name ? name : `Zone ${props.LocationID ?? ""}`;
+      if (!name) return;
+
+      const labelText =
+        zoom < LABEL_ZOOM_ALL ? shortenLabel(name, LABEL_MAX_CHARS_MID) : name;
 
       layer.bindTooltip(labelText, {
         permanent: true,
@@ -176,6 +209,11 @@ async function loadFrame(idx) {
       });
     },
   }).addTo(map);
+}
+
+async function loadFrame(idx) {
+  const frame = await fetchJSON(`${RAILWAY_BASE}/frame/${idx}`);
+  renderFrame(frame);
 }
 
 async function loadTimeline() {
@@ -195,6 +233,11 @@ async function loadTimeline() {
 
   await loadFrame(idx);
 }
+
+// When zoom changes, just re-render current frame (no network)
+map.on("zoomend", () => {
+  if (currentFrame) renderFrame(currentFrame);
+});
 
 // Debounced slider
 let sliderDebounce = null;
