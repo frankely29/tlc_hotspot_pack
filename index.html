@@ -72,12 +72,12 @@
 
     /* ---------- ZONE LABEL TOOLTIP ---------- */
     .zone-label {
-      background: rgba(255,255,255,0.85);
+      background: rgba(255,255,255,0.82);
       border: 0;
       border-radius: 6px;
-      padding: 2px 6px;
+      padding: 2px 5px;
       color: #111;
-      box-shadow: 0 1px 6px rgba(0,0,0,0.15);
+      box-shadow: 0 1px 4px rgba(0,0,0,0.12);
       white-space: nowrap;
     }
 
@@ -87,32 +87,32 @@
     }
 
     .zone-label .br {
-      font-weight: 700;
-      opacity: 0.6;   /* lighter borough text */
+      font-weight: 600;
+      opacity: 0.5; /* lighter borough */
       line-height: 1.05;
     }
 
-    /* ---------- ZOOM SCALING ---------- */
+    /* ---------- EXTREME REDUCTION WHEN ZOOMED OUT ---------- */
 
     /* Very zoomed out */
-    .zone-label.z10 .zn { font-size: 9px; }
-    .zone-label.z10 .br { font-size: 7px; }
+    .zone-label.z10 .zn { font-size: 8px; }
+    .zone-label.z10 .br { font-size: 5px; }
 
-    .zone-label.z11 .zn { font-size: 10px; }
-    .zone-label.z11 .br { font-size: 8px; }
+    .zone-label.z11 .zn { font-size: 9px; }
+    .zone-label.z11 .br { font-size: 6px; }
 
     /* Medium zoom */
-    .zone-label.z12 .zn { font-size: 11px; }
-    .zone-label.z12 .br { font-size: 9px; }
+    .zone-label.z12 .zn { font-size: 10px; }
+    .zone-label.z12 .br { font-size: 7px; }
 
-    .zone-label.z13 .zn { font-size: 12px; }
-    .zone-label.z13 .br { font-size: 10px; }
+    .zone-label.z13 .zn { font-size: 11px; }
+    .zone-label.z13 .br { font-size: 8px; }
 
-    /* Closer zoom */
+    /* Close zoom */
     .zone-label.z14 .zn { font-size: 13px; }
-    .zone-label.z14 .br { font-size: 11px; }
+    .zone-label.z14 .br { font-size: 10px; }
 
-    .zone-label.z15 .zn { font-size: 14px; }
+    .zone-label.z15 .zn { font-size: 15px; }
     .zone-label.z15 .br { font-size: 12px; }
   </style>
 </head>
@@ -145,7 +145,7 @@
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="app.js?v=20"></script>
+  <script src="app.js?v=21"></script>
 
 </body>
 </html>
