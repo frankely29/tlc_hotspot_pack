@@ -1,32 +1,19 @@
 const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
 const BIN_MINUTES = 20;
 
-// LABEL VISIBILITY (mobile-friendly, demand-priority)
-const LABEL_ZOOM_MIN = 10;        // below this: no labels at all
-const BOROUGH_ZOOM_SHOW = 14;     // borough line only when zoomed in enough
-const LABEL_MAX_CHARS_MID = 14;   // shorten zone names at mid zoom
+/**
+ * Label policy (less zoom needed, but declutter keeps it readable)
+ * - Start showing labels earlier
+ * - Only show borough line when fairly zoomed in
+ */
+const LABEL_ZOOM_START = 9;      // start showing some labels
+const LABEL_ZOOM_ALL = 11;       // allow all buckets (still filtered by declutter)
+const BOROUGH_ZOOM_SHOW = 13;    // show borough line only when zoomed in
+const LABEL_MAX_CHARS_LOW = 12;  // shorten at low zoom
+const LABEL_MAX_CHARS_MID = 16;  // shorten at mid zoom
 
-// Demand priority label rules by zoom:
-// z10: green only
-// z11: green + purple
-// z12: + blue
-// z13: + sky
-// z14: + yellow
-// z15+: + red (everything)
-function shouldShowLabel(bucket, zoom) {
-  if (zoom < LABEL_ZOOM_MIN) return false;
-
-  // Normalize bucket string
-  const b = (bucket || "").trim();
-
-  if (zoom >= 15) return true; // all
-  if (zoom === 14) return b !== "red";
-  if (zoom === 13) return b === "green" || b === "purple" || b === "blue" || b === "sky";
-  if (zoom === 12) return b === "green" || b === "purple" || b === "blue";
-  if (zoom === 11) return b === "green" || b === "purple";
-  // zoom === 10
-  return b === "green";
-}
+// Declutter spacing (in pixels). Bigger = fewer labels, less overlap.
+const DECLUTTER_PADDING = 4;
 
 // ---------- Time helpers ----------
 function parseIsoNoTz(iso) {
@@ -72,7 +59,6 @@ function getNowNYCMinuteOfWeekRounded() {
 
   const hour = Number(map.hour);
   const minute = Number(map.minute);
-
   const total = dow_m * 1440 + hour * 60 + minute;
   return Math.floor(total / BIN_MINUTES) * BIN_MINUTES;
 }
@@ -105,7 +91,7 @@ async function fetchJSON(url) {
   }
 }
 
-// ---------- Bucket label ----------
+// ---------- Buckets ----------
 function prettyBucket(b) {
   const m = {
     green: "Highest",
@@ -118,7 +104,28 @@ function prettyBucket(b) {
   return m[b] || (b ?? "");
 }
 
-// ---------- Label helpers ----------
+// Higher score = higher label priority
+function bucketPriority(bucket) {
+  switch (bucket) {
+    case "green": return 6;
+    case "purple": return 5;
+    case "blue": return 4;
+    case "sky": return 3;
+    case "yellow": return 2;
+    case "red": return 1;
+    default: return 0;
+  }
+}
+
+// ---------- Text / HTML ----------
+function escapeHtml(s) {
+  return String(s)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
 function shortenLabel(text, maxChars) {
   const t = (text || "").trim();
   if (!t) return "";
@@ -126,19 +133,35 @@ function shortenLabel(text, maxChars) {
   return t.slice(0, maxChars - 1) + "…";
 }
 function zoomClass(zoom) {
-  // Clamp to classes defined in CSS: z10..z15
-  const z = Math.max(10, Math.min(15, Math.round(zoom)));
+  // We defined CSS classes z9..z14
+  const z = Math.max(9, Math.min(14, Math.round(zoom)));
   return `z${z}`;
 }
+
+/**
+ * Decide if a bucket can show labels at this zoom.
+ * - At low zoom show only higher demand first (green/purple/blue)
+ * - At mid zoom allow sky too
+ * - At higher zoom allow all
+ */
+function bucketAllowedAtZoom(bucket, zoom) {
+  if (zoom < LABEL_ZOOM_START) return false;
+  if (zoom < 10) return bucket === "green" || bucket === "purple" || bucket === "blue";
+  if (zoom < LABEL_ZOOM_ALL) return bucket !== "red"; // allow most, still skip red until a bit closer
+  return true;
+}
+
 function labelHTML(props, zoom) {
   const name = (props.zone_name || "").trim();
   if (!name) return "";
 
   const bucket = (props.bucket || "").trim();
-  if (!shouldShowLabel(bucket, Math.round(zoom))) return "";
+  if (!bucketAllowedAtZoom(bucket, zoom)) return "";
 
-  // Shorten at lower zooms
-  const zoneText = zoom < 13 ? shortenLabel(name, LABEL_MAX_CHARS_MID) : name;
+  let maxChars = LABEL_MAX_CHARS_MID;
+  if (zoom <= 10) maxChars = LABEL_MAX_CHARS_LOW;
+
+  const zoneText = shortenLabel(name, maxChars);
 
   const borough = (props.borough || "").trim();
   const showBorough = zoom >= BOROUGH_ZOOM_SHOW && borough;
@@ -148,13 +171,46 @@ function labelHTML(props, zoom) {
     ${showBorough ? `<div class="br">${escapeHtml(borough)}</div>` : ""}
   `;
 }
-function escapeHtml(s) {
-  return String(s)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+
+// ---------- Label placement (inside polygon) ----------
+function interiorLabelLatLng(feature) {
+  // Use Turf polylabel to pick an interior point that is inside the polygon.
+  // Works for Polygon / MultiPolygon.
+  try {
+    const pt = turf.polylabel(feature, { precision: 1.0 });
+    const coords = pt?.geometry?.coordinates;
+    if (coords && coords.length === 2) {
+      return L.latLng(coords[1], coords[0]);
+    }
+  } catch {}
+  // Fallback: center of mass
+  try {
+    const pt2 = turf.centerOfMass(feature);
+    const c2 = pt2?.geometry?.coordinates;
+    if (c2 && c2.length === 2) {
+      return L.latLng(c2[1], c2[0]);
+    }
+  } catch {}
+  return null;
+}
+
+// Estimate label box size in screen px (good enough for declutter)
+function estimateLabelBox(zoom, zoneText, showBorough) {
+  // Char width heuristic depends on zoom class
+  const z = Math.max(9, Math.min(14, Math.round(zoom)));
+
+  // zone font grows with zoom, so width grows a bit
+  const charW = (z <= 10) ? 6.3 : (z <= 12 ? 6.7 : 7.1);
+  const padW = 18; // bubble horizontal padding
+  const w = Math.min(260, Math.max(60, zoneText.length * charW + padW));
+
+  // Height: zone line + optional borough
+  const h = showBorough ? (z <= 10 ? 30 : 34) : (z <= 10 ? 20 : 22);
+  return { w, h };
+}
+
+function rectsOverlap(a, b) {
+  return !(a.x2 < b.x1 || a.x1 > b.x2 || a.y2 < b.y1 || a.y1 > b.y2);
 }
 
 // ---------- Leaflet map ----------
@@ -168,12 +224,13 @@ L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
   maxZoom: 19,
 }).addTo(map);
 
-let geoLayer = null;
+let geoLayer = null;       // polygons
+let labelLayer = null;     // decluttered label markers
 let timeline = [];
 let minutesOfWeek = [];
 let currentFrame = null;
 
-// Popup
+// Popup (unchanged)
 function buildPopupHTML(props) {
   const zoneName = (props.zone_name || "").trim();
   const borough = (props.borough || "").trim();
@@ -194,18 +251,12 @@ function buildPopupHTML(props) {
   `;
 }
 
-function renderFrame(frame) {
-  currentFrame = frame;
-  timeLabel.textContent = formatNYCLabel(frame.time);
+function clearLayers() {
+  if (geoLayer) { geoLayer.remove(); geoLayer = null; }
+  if (labelLayer) { labelLayer.remove(); labelLayer = null; }
+}
 
-  if (geoLayer) {
-    geoLayer.remove();
-    geoLayer = null;
-  }
-
-  const zoomNow = map.getZoom();
-  const zClass = zoomClass(zoomNow);
-
+function renderPolygons(frame) {
   geoLayer = L.geoJSON(frame.polygons, {
     style: (feature) => {
       const st = feature?.properties?.style || {};
@@ -220,19 +271,99 @@ function renderFrame(frame) {
     onEachFeature: (feature, layer) => {
       const props = feature.properties || {};
       layer.bindPopup(buildPopupHTML(props), { maxWidth: 300 });
-
-      const html = labelHTML(props, zoomNow);
-      if (!html) return;
-
-      layer.bindTooltip(html, {
-        permanent: true,
-        direction: "center",
-        className: `zone-label ${zClass}`,
-        opacity: 0.92,
-        interactive: false,
-      });
     },
   }).addTo(map);
+}
+
+function renderLabels(frame) {
+  const zoomNow = map.getZoom();
+  const zClass = zoomClass(zoomNow);
+
+  labelLayer = L.layerGroup().addTo(map);
+
+  // Build candidate labels with priority
+  const candidates = [];
+  for (const f of (frame.polygons?.features || [])) {
+    const props = f.properties || {};
+    const bucket = (props.bucket || "").trim();
+    const name = (props.zone_name || "").trim();
+    if (!name) continue;
+    if (!bucketAllowedAtZoom(bucket, zoomNow)) continue;
+
+    const borough = (props.borough || "").trim();
+    const showBorough = zoomNow >= BOROUGH_ZOOM_SHOW && !!borough;
+
+    // Determine label text (same shortening used in HTML)
+    let maxChars = LABEL_MAX_CHARS_MID;
+    if (zoomNow <= 10) maxChars = LABEL_MAX_CHARS_LOW;
+    const zoneText = shortenLabel(name, maxChars);
+
+    const latlng = interiorLabelLatLng(f);
+    if (!latlng) continue;
+
+    // Higher priority first; tie-break by pickups
+    const pr = bucketPriority(bucket);
+    const pickups = Number(props.pickups || 0);
+
+    candidates.push({
+      feature: f,
+      props,
+      bucket,
+      pr,
+      pickups,
+      zoneText,
+      showBorough,
+      latlng
+    });
+  }
+
+  candidates.sort((a, b) => {
+    if (b.pr !== a.pr) return b.pr - a.pr;
+    return b.pickups - a.pickups;
+  });
+
+  const occupied = [];
+
+  for (const c of candidates) {
+    const html = labelHTML(c.props, zoomNow);
+    if (!html) continue;
+
+    const pt = map.latLngToContainerPoint(c.latlng);
+    const box = estimateLabelBox(zoomNow, c.zoneText, c.showBorough);
+
+    const rect = {
+      x1: pt.x - box.w / 2 - DECLUTTER_PADDING,
+      y1: pt.y - box.h / 2 - DECLUTTER_PADDING,
+      x2: pt.x + box.w / 2 + DECLUTTER_PADDING,
+      y2: pt.y + box.h / 2 + DECLUTTER_PADDING,
+    };
+
+    // Skip if overlapping any existing label
+    let ok = true;
+    for (const r of occupied) {
+      if (rectsOverlap(rect, r)) { ok = false; break; }
+    }
+    if (!ok) continue;
+
+    occupied.push(rect);
+
+    const icon = L.divIcon({
+      className: `zone-label ${zClass} bucket-${c.bucket}`,
+      html,
+      iconSize: null, // allow auto
+    });
+
+    L.marker(c.latlng, { icon, interactive: false }).addTo(labelLayer);
+  }
+}
+
+function renderFrame(frame) {
+  currentFrame = frame;
+  timeLabel.textContent = formatNYCLabel(frame.time);
+
+  clearLayers();
+  renderPolygons(frame);
+  renderLabels(frame);
 }
 
 async function loadFrame(idx) {
@@ -258,9 +389,12 @@ async function loadTimeline() {
   await loadFrame(idx);
 }
 
-// Re-render on zoom (no network)
+// Re-render only labels on zoom (no network)
 map.on("zoomend", () => {
-  if (currentFrame) renderFrame(currentFrame);
+  if (!currentFrame) return;
+  // Keep polygons, just rebuild labels (faster + no flicker)
+  if (labelLayer) { labelLayer.remove(); labelLayer = null; }
+  renderLabels(currentFrame);
 });
 
 // Debounced slider
