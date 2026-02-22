@@ -1,43 +1,36 @@
-// =====================
-// NYC TLC Hotspot Map (Frontend)
-// app.js
-// =====================
+// app.js (FULL) — NYC TLC Hotspot Map Frontend
+// - Loads timeline + frames from Railway
+// - Demand-priority zone labels by zoom (green shows first, then purple, etc.)
+// - Optional live location (blue arrow + accuracy circle)
 
 const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
 const BIN_MINUTES = 20;
 
-// ---------- Live Location (YOU) ----------
-const ENABLE_LIVE_LOCATION = true;          // turn off if you want
-const LOCATE_ON_START = true;               // auto-start GPS
-const AUTO_CENTER_ON_FIRST_FIX = true;      // center map once when GPS first works
-const AUTO_CENTER_ZOOM = null;              // null = keep current zoom, or set number like 14
-const GPS_HIGH_ACCURACY = true;
-const GPS_MAX_AGE_MS = 5000;
-const GPS_TIMEOUT_MS = 15000;
+// ---------------------- LIVE LOCATION ----------------------
+const ENABLE_LIVE_LOCATION = true;      // turn off if you ever want: false
+const AUTO_CENTER_ON_FIRST_FIX = true;  // center map once when GPS first locks
 
-// Put your Tesla icon here (NO transparency):
-// /assets/tesla-marker.png
-const TESLA_ICON_URL = "./assets/tesla-marker.png";
-const TESLA_ICON_SIZE = [46, 46];
-const TESLA_ICON_ANCHOR = [23, 23];
+let gpsWatchId = null;
+let gpsFirstFixDone = false;
+let myPosMarker = null;
+let myAccCircle = null;
 
-// LABEL VISIBILITY (mobile-friendly, demand-priority)
-const LABEL_ZOOM_MIN = 10;        // below this: no labels at all
-const BOROUGH_ZOOM_SHOW = 14;     // borough line only when zoomed in enough
-const LABEL_MAX_CHARS_MID = 14;   // shorten zone names at mid zoom
-
-// Demand priority label rules by zoom:
+// ---------------------- LABEL RULES ----------------------
+// Below zoom 10: no labels
 // z10: green only
 // z11: green + purple
 // z12: + blue
 // z13: + sky
 // z14: + yellow
 // z15+: + red (everything)
+const LABEL_ZOOM_MIN = 10;
+const BOROUGH_ZOOM_SHOW = 14;     // borough line only when zoomed in enough
+const LABEL_MAX_CHARS_MID = 14;   // shorten zone names at lower zooms
+
 function shouldShowLabel(bucket, zoom) {
   if (zoom < LABEL_ZOOM_MIN) return false;
 
   const b = (bucket || "").trim();
-
   if (zoom >= 15) return true; // all
   if (zoom === 14) return b !== "red";
   if (zoom === 13) return b === "green" || b === "purple" || b === "blue" || b === "sky";
@@ -46,7 +39,7 @@ function shouldShowLabel(bucket, zoom) {
   return b === "green"; // zoom === 10
 }
 
-// ---------- Time helpers ----------
+// ---------------------- TIME HELPERS ----------------------
 function parseIsoNoTz(iso) {
   const [d, t] = iso.split("T");
   const [Y, M, D] = d.split("-").map(Number);
@@ -56,8 +49,8 @@ function parseIsoNoTz(iso) {
 function dowMon0FromIso(iso) {
   const { Y, M, D, h, m, s } = parseIsoNoTz(iso);
   const dt = new Date(Date.UTC(Y, M - 1, D, h, m, s));
-  const dowSun0 = dt.getUTCDay();
-  return dowSun0 === 0 ? 6 : dowSun0 - 1;
+  const dowSun0 = dt.getUTCDay(); // 0=Sun..6=Sat
+  return dowSun0 === 0 ? 6 : dowSun0 - 1; // Mon=0..Sun=6
 }
 function minuteOfWeekFromIso(iso) {
   const { h, m } = parseIsoNoTz(iso);
@@ -111,7 +104,7 @@ function pickClosestIndex(minutesOfWeekArr, target) {
   return bestIdx;
 }
 
-// ---------- Network ----------
+// ---------------------- NETWORK ----------------------
 async function fetchJSON(url) {
   const res = await fetch(url, { cache: "no-store", mode: "cors" });
   const text = await res.text();
@@ -123,7 +116,7 @@ async function fetchJSON(url) {
   }
 }
 
-// ---------- Bucket label ----------
+// ---------------------- BUCKET LABEL ----------------------
 function prettyBucket(b) {
   const m = {
     green: "Highest",
@@ -136,7 +129,7 @@ function prettyBucket(b) {
   return m[b] || (b ?? "");
 }
 
-// ---------- Label helpers ----------
+// ---------------------- LABEL HELPERS ----------------------
 function shortenLabel(text, maxChars) {
   const t = (text || "").trim();
   if (!t) return "";
@@ -144,6 +137,7 @@ function shortenLabel(text, maxChars) {
   return t.slice(0, maxChars - 1) + "…";
 }
 function zoomClass(zoom) {
+  // Clamp to z10..z15 (your CSS should define these)
   const z = Math.max(10, Math.min(15, Math.round(zoom)));
   return `z${z}`;
 }
@@ -152,12 +146,13 @@ function labelHTML(props, zoom) {
   if (!name) return "";
 
   const bucket = (props.bucket || "").trim();
-  if (!shouldShowLabel(bucket, Math.round(zoom))) return "";
+  const z = Math.round(zoom);
+  if (!shouldShowLabel(bucket, z)) return "";
 
-  const zoneText = zoom < 13 ? shortenLabel(name, LABEL_MAX_CHARS_MID) : name;
+  const zoneText = z < 13 ? shortenLabel(name, LABEL_MAX_CHARS_MID) : name;
 
   const borough = (props.borough || "").trim();
-  const showBorough = zoom >= BOROUGH_ZOOM_SHOW && borough;
+  const showBorough = z >= BOROUGH_ZOOM_SHOW && borough;
 
   return `
     <div class="zn">${escapeHtml(zoneText)}</div>
@@ -173,10 +168,11 @@ function escapeHtml(s) {
     .replaceAll("'", "&#039;");
 }
 
-// ---------- Leaflet map ----------
+// ---------------------- LEAFLET MAP ----------------------
 const slider = document.getElementById("slider");
 const timeLabel = document.getElementById("timeLabel");
 
+// Start view (NYC)
 const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 11);
 
 L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
@@ -189,126 +185,7 @@ let timeline = [];
 let minutesOfWeek = [];
 let currentFrame = null;
 
-// ---------- Live Location state ----------
-let gpsWatchId = null;
-let gpsFirstFixDone = false;
-let myPosMarker = null;
-let myAccCircle = null;
-
-function buildTeslaIcon() {
-  return L.icon({
-    iconUrl: TESLA_ICON_URL,
-    iconSize: TESLA_ICON_SIZE,
-    iconAnchor: TESLA_ICON_ANCHOR,
-  });
-}
-
-function startLiveLocation() {
-  if (!ENABLE_LIVE_LOCATION) return;
-
-  if (!("geolocation" in navigator)) {
-    console.warn("Geolocation not supported on this browser.");
-    return;
-  }
-
-  // Avoid double-watch
-  if (gpsWatchId != null) return;
-
-  const teslaIcon = buildTeslaIcon();
-
-  gpsWatchId = navigator.geolocation.watchPosition(
-    (pos) => {
-      const lat = pos.coords.latitude;
-      const lng = pos.coords.longitude;
-      const acc = pos.coords.accuracy || 0;
-
-      const ll = [lat, lng];
-
-      // Marker (Tesla)
-      if (!myPosMarker) {
-        myPosMarker = L.marker(ll, {
-          icon: teslaIcon,
-          interactive: false,
-          zIndexOffset: 9999,
-        }).addTo(map);
-
-        // If the icon fails to load, Leaflet still shows a broken image icon.
-        // We also keep a small backup circle so you ALWAYS see yourself.
-        // (This backup is subtle and won't block the map.)
-        const backup = L.circleMarker(ll, {
-          radius: 5,
-          weight: 2,
-          color: "#0b5cff",
-          fillColor: "#0b5cff",
-          fillOpacity: 0.85,
-        }).addTo(map);
-        // attach backup to marker so we can update/remove later
-        myPosMarker._backupCircle = backup;
-      } else {
-        myPosMarker.setLatLng(ll);
-        if (myPosMarker._backupCircle) myPosMarker._backupCircle.setLatLng(ll);
-      }
-
-      // Accuracy circle
-      if (!myAccCircle) {
-        myAccCircle = L.circle(ll, {
-          radius: Math.max(10, acc),
-          weight: 1,
-          color: "#0b5cff",
-          opacity: 0.35,
-          fillColor: "#0b5cff",
-          fillOpacity: 0.08,
-          interactive: false,
-        }).addTo(map);
-      } else {
-        myAccCircle.setLatLng(ll);
-        myAccCircle.setRadius(Math.max(10, acc));
-      }
-
-      // Center only once (so it doesn't keep snapping while you drive)
-      if (!gpsFirstFixDone && AUTO_CENTER_ON_FIRST_FIX) {
-        gpsFirstFixDone = true;
-        if (typeof AUTO_CENTER_ZOOM === "number") {
-          map.setView(ll, AUTO_CENTER_ZOOM, { animate: true });
-        } else {
-          map.setView(ll, map.getZoom(), { animate: true });
-        }
-      }
-    },
-    (err) => {
-      console.warn("Geolocation error:", err);
-      // common: user denied permission
-    },
-    {
-      enableHighAccuracy: GPS_HIGH_ACCURACY,
-      maximumAge: GPS_MAX_AGE_MS,
-      timeout: GPS_TIMEOUT_MS,
-    }
-  );
-}
-
-function stopLiveLocation() {
-  if (gpsWatchId != null) {
-    navigator.geolocation.clearWatch(gpsWatchId);
-    gpsWatchId = null;
-  }
-  gpsFirstFixDone = false;
-
-  if (myPosMarker) {
-    if (myPosMarker._backupCircle) {
-      map.removeLayer(myPosMarker._backupCircle);
-      myPosMarker._backupCircle = null;
-    }
-    map.removeLayer(myPosMarker);
-    myPosMarker = null;
-  }
-  if (myAccCircle) {
-    map.removeLayer(myAccCircle);
-    myAccCircle = null;
-  }
-}
-
-// Popup
+// ---------------------- POPUP ----------------------
 function buildPopupHTML(props) {
   const zoneName = (props.zone_name || "").trim();
   const borough = (props.borough || "").trim();
@@ -329,6 +206,7 @@ function buildPopupHTML(props) {
   `;
 }
 
+// ---------------------- RENDER ----------------------
 function renderFrame(frame) {
   currentFrame = frame;
   timeLabel.textContent = formatNYCLabel(frame.time);
@@ -406,14 +284,87 @@ slider.addEventListener("input", () => {
   sliderDebounce = setTimeout(() => loadFrame(idx).catch(console.error), 80);
 });
 
-// Boot
+// ---------------------- LIVE LOCATION (BLUE ARROW) ----------------------
+function startLiveLocation() {
+  if (!ENABLE_LIVE_LOCATION) return;
+
+  if (!("geolocation" in navigator)) {
+    console.warn("Geolocation not supported on this browser.");
+    return;
+  }
+
+  if (gpsWatchId != null) return; // already running
+
+  gpsWatchId = navigator.geolocation.watchPosition(
+    (pos) => {
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+      const acc = pos.coords.accuracy || 0;
+      const ll = [lat, lng];
+
+      // Solid blue arrow with white outline (very visible on any color)
+      const arrowIcon = L.divIcon({
+        className: "",
+        html: `
+          <div style="width:28px;height:28px;">
+            <svg viewBox="0 0 24 24" width="28" height="28">
+              <path d="M12 2 L22 22 L12 17 L2 22 Z"
+                fill="#0066ff"
+                stroke="#ffffff"
+                stroke-width="1.6"/>
+            </svg>
+          </div>
+        `,
+        iconSize: [28, 28],
+        iconAnchor: [14, 14],
+      });
+
+      if (!myPosMarker) {
+        myPosMarker = L.marker(ll, {
+          icon: arrowIcon,
+          interactive: false,
+          zIndexOffset: 9999,
+        }).addTo(map);
+      } else {
+        myPosMarker.setLatLng(ll);
+      }
+
+      // Accuracy circle (light)
+      if (!myAccCircle) {
+        myAccCircle = L.circle(ll, {
+          radius: Math.max(10, acc),
+          weight: 1,
+          color: "#0066ff",
+          opacity: 0.35,
+          fillColor: "#0066ff",
+          fillOpacity: 0.08,
+          interactive: false,
+        }).addTo(map);
+      } else {
+        myAccCircle.setLatLng(ll);
+        myAccCircle.setRadius(Math.max(10, acc));
+      }
+
+      if (!gpsFirstFixDone && AUTO_CENTER_ON_FIRST_FIX) {
+        gpsFirstFixDone = true;
+        map.setView(ll, map.getZoom(), { animate: true });
+      }
+    },
+    (err) => {
+      console.warn("Geolocation error:", err);
+    },
+    {
+      enableHighAccuracy: true,
+      maximumAge: 5000,
+      timeout: 15000,
+    }
+  );
+}
+
+// ---------------------- BOOT ----------------------
+startLiveLocation();
+
 loadTimeline().catch((err) => {
   console.error(err);
   timeLabel.textContent = `Error loading timeline: ${err.message}`;
 });
-
-// Start live location (if enabled)
-if (ENABLE_LIVE_LOCATION && LOCATE_ON_START) {
-  // Safari iOS usually asks permission when this runs
-  startLiveLocation();
-}
