@@ -1,32 +1,18 @@
 const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
 const BIN_MINUTES = 20;
 
-// ---------------------- LIVE LOCATION ----------------------
-const ENABLE_LIVE_LOCATION = true;
-
-let autoCenterEnabled = true;
-let gpsWatchId = null;
-let gpsFirstFixDone = false;
-
-let myPosMarker = null;
-let myAccCircle = null;
-
-// Used for bearing + motion detection
-let lastFix = null; // {lat,lng,ts,speedMps,headingDeg}
-const MOVING_SPEED_MPS = 1.1;      // ~2.5 mph (tweak if you want)
-const STATIONARY_SPEED_MPS = 0.6;  // below this = stationary
-
-// ---------------------- LABEL RULES ----------------------
+/** LABEL VISIBILITY (mobile-friendly, demand-priority)
+ * z10: green only
+ * z11: green + purple
+ * z12: + blue
+ * z13: + sky
+ * z14: + yellow
+ * z15+: + red (everything)
+ */
 const LABEL_ZOOM_MIN = 10;
-const BOROUGH_ZOOM_SHOW = 14;
+const BOROUGH_ZOOM_SHOW = 15;     // borough line only when very zoomed in
 const LABEL_MAX_CHARS_MID = 14;
 
-// z10: green
-// z11: + purple
-// z12: + blue
-// z13: + sky
-// z14: + yellow
-// z15+: + red
 function shouldShowLabel(bucket, zoom) {
   if (zoom < LABEL_ZOOM_MIN) return false;
 
@@ -39,7 +25,7 @@ function shouldShowLabel(bucket, zoom) {
   return b === "green";
 }
 
-// ---------------------- TIME HELPERS ----------------------
+// ---------- Time helpers ----------
 function parseIsoNoTz(iso) {
   const [d, t] = iso.split("T");
   const [Y, M, D] = d.split("-").map(Number);
@@ -104,7 +90,7 @@ function pickClosestIndex(minutesOfWeekArr, target) {
   return bestIdx;
 }
 
-// ---------------------- NETWORK ----------------------
+// ---------- Network ----------
 async function fetchJSON(url) {
   const res = await fetch(url, { cache: "no-store", mode: "cors" });
   const text = await res.text();
@@ -116,7 +102,7 @@ async function fetchJSON(url) {
   }
 }
 
-// ---------------------- BUCKET LABEL ----------------------
+// ---------- Bucket label ----------
 function prettyBucket(b) {
   const m = {
     green: "Highest",
@@ -129,7 +115,7 @@ function prettyBucket(b) {
   return m[b] || (b ?? "");
 }
 
-// ---------------------- LABEL HELPERS ----------------------
+// ---------- Label helpers ----------
 function shortenLabel(text, maxChars) {
   const t = (text || "").trim();
   if (!t) return "";
@@ -145,13 +131,12 @@ function labelHTML(props, zoom) {
   if (!name) return "";
 
   const bucket = (props.bucket || "").trim();
-  const z = Math.round(zoom);
-  if (!shouldShowLabel(bucket, z)) return "";
+  if (!shouldShowLabel(bucket, Math.round(zoom))) return "";
 
-  const zoneText = z < 13 ? shortenLabel(name, LABEL_MAX_CHARS_MID) : name;
+  const zoneText = zoom < 13 ? shortenLabel(name, LABEL_MAX_CHARS_MID) : name;
 
   const borough = (props.borough || "").trim();
-  const showBorough = z >= BOROUGH_ZOOM_SHOW && borough;
+  const showBorough = zoom >= BOROUGH_ZOOM_SHOW && borough;
 
   return `
     <div class="zn">${escapeHtml(zoneText)}</div>
@@ -167,10 +152,111 @@ function escapeHtml(s) {
     .replaceAll("'", "&#039;");
 }
 
-// ---------------------- LEAFLET MAP ----------------------
+// ---------- Recommendation helpers ----------
+const recommendEl = document.getElementById("recommendLine");
+let userLatLng = null;
+
+function haversineMiles(a, b) {
+  const R = 3958.7613;
+  const toRad = (x) => (x * Math.PI) / 180;
+
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+
+  const s1 = Math.sin(dLat / 2);
+  const s2 = Math.sin(dLng / 2);
+  const h = s1 * s1 + Math.cos(lat1) * Math.cos(lat2) * s2 * s2;
+
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+function geometryCenter(geom) {
+  let pts = [];
+  if (!geom) return null;
+
+  if (geom.type === "Polygon") {
+    pts = geom.coordinates?.[0] || [];
+  } else if (geom.type === "MultiPolygon") {
+    const polys = geom.coordinates || [];
+    for (const p of polys) {
+      const ring = p?.[0] || [];
+      pts.push(...ring);
+    }
+  } else {
+    return null;
+  }
+
+  if (!pts.length) return null;
+
+  let sumLng = 0, sumLat = 0;
+  for (const [lng, lat] of pts) {
+    sumLng += lng;
+    sumLat += lat;
+  }
+  return { lat: sumLat / pts.length, lng: sumLng / pts.length };
+}
+
+function updateRecommendation(frame) {
+  if (!recommendEl) return;
+
+  if (!userLatLng) {
+    recommendEl.textContent = "Recommended: enable location to get suggestions";
+    return;
+  }
+  const feats = frame?.polygons?.features || [];
+  if (!feats.length) {
+    recommendEl.textContent = "Recommended: …";
+    return;
+  }
+
+  // rating matters most; distance matters some
+  const DIST_PENALTY_PER_MILE = 2.0;
+
+  let best = null;
+
+  for (const f of feats) {
+    const props = f.properties || {};
+    const geom = f.geometry;
+
+    const rating = Number(props.rating ?? NaN);
+    if (!Number.isFinite(rating)) continue;
+
+    const center = geometryCenter(geom);
+    if (!center) continue;
+
+    const dMi = haversineMiles(userLatLng, center);
+
+    const bucket = (props.bucket || "").trim();
+    const hardAvoid = bucket === "red";
+
+    const score = rating - dMi * DIST_PENALTY_PER_MILE - (hardAvoid ? 12 : 0);
+
+    if (!best || score > best.score) {
+      best = {
+        score,
+        dMi,
+        rating,
+        name: (props.zone_name || "").trim() || `Zone ${props.LocationID ?? ""}`,
+        borough: (props.borough || "").trim(),
+      };
+    }
+  }
+
+  if (!best) {
+    recommendEl.textContent = "Recommended: not enough data for your area";
+    return;
+  }
+
+  const distTxt = best.dMi >= 10 ? `${best.dMi.toFixed(0)} mi` : `${best.dMi.toFixed(1)} mi`;
+  const bTxt = best.borough ? ` (${best.borough})` : "";
+  recommendEl.textContent = `Recommended: ${best.name}${bTxt} — Rating ${best.rating} — ${distTxt}`;
+}
+
+// ---------- Leaflet map ----------
 const slider = document.getElementById("slider");
 const timeLabel = document.getElementById("timeLabel");
-const autoCenterBtn = document.getElementById("autoCenterBtn");
 
 const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 11);
 
@@ -184,7 +270,7 @@ let timeline = [];
 let minutesOfWeek = [];
 let currentFrame = null;
 
-// ---------------------- POPUP ----------------------
+// Popup
 function buildPopupHTML(props) {
   const zoneName = (props.zone_name || "").trim();
   const borough = (props.borough || "").trim();
@@ -205,7 +291,6 @@ function buildPopupHTML(props) {
   `;
 }
 
-// ---------------------- RENDER ----------------------
 function renderFrame(frame) {
   currentFrame = frame;
   timeLabel.textContent = formatNYCLabel(frame.time);
@@ -245,6 +330,8 @@ function renderFrame(frame) {
       });
     },
   }).addTo(map);
+
+  updateRecommendation(frame);
 }
 
 async function loadFrame(idx) {
@@ -283,168 +370,154 @@ slider.addEventListener("input", () => {
   sliderDebounce = setTimeout(() => loadFrame(idx).catch(console.error), 80);
 });
 
-// ---------------------- AUTO-CENTER BUTTON ----------------------
-function updateAutoCenterUI() {
-  if (!autoCenterBtn) return;
-  autoCenterBtn.textContent = `Auto-center: ${autoCenterEnabled ? "ON" : "OFF"}`;
-  autoCenterBtn.classList.toggle("on", autoCenterEnabled);
-  autoCenterBtn.classList.toggle("off", !autoCenterEnabled);
-}
-if (autoCenterBtn) {
-  autoCenterBtn.addEventListener("click", () => {
-    autoCenterEnabled = !autoCenterEnabled;
-    updateAutoCenterUI();
+// ---------- Live location arrow + auto-center ----------
+let autoCenter = true;
+let gpsFirstFixDone = false;
+
+let navMarker = null;
+let lastPos = null; // {lat,lng,ts}
+let lastHeadingDeg = 0;
+let lastMoveTs = 0;
+
+function makeNavIcon() {
+  return L.divIcon({
+    className: "",
+    html: `<div id="navWrap" class="navArrowWrap navPulse"><div class="navArrow"></div></div>`,
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
   });
-  updateAutoCenterUI();
 }
 
-// ---------------------- BEARING / HEADING HELPERS ----------------------
-function toRad(d) { return (d * Math.PI) / 180; }
-function toDeg(r) { return (r * 180) / Math.PI; }
-
-// Bearing from A->B (degrees, 0=N, 90=E)
-function bearingDeg(lat1, lon1, lat2, lon2) {
-  const φ1 = toRad(lat1);
-  const φ2 = toRad(lat2);
-  const Δλ = toRad(lon2 - lon1);
-  const y = Math.sin(Δλ) * Math.cos(φ2);
-  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
-  let θ = toDeg(Math.atan2(y, x));
-  θ = (θ + 360) % 360;
-  return θ;
+function setNavVisual(isMoving) {
+  const el = document.getElementById("navWrap");
+  if (!el) return;
+  el.classList.toggle("navMoving", !!isMoving);
+  el.classList.toggle("navPulse", !isMoving);
 }
 
-function buildArrowHTML(heading, moving) {
-  const cls = moving ? "my-loc moving" : "my-loc stationary";
-  // Rotate the whole container so SVG rotates too
-  return `
-    <div class="${cls}" style="transform: rotate(${Math.round(heading)}deg);">
-      <svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true">
-        <path d="M12 2 L21 22 L12 17 L3 22 Z"
-          fill="#0066ff"
-          stroke="#ffffff"
-          stroke-width="1.7"/>
-      </svg>
-    </div>
-  `;
+function setNavRotation(deg) {
+  const el = document.getElementById("navWrap");
+  if (!el) return;
+  el.style.transform = `rotate(${deg}deg)`;
 }
 
-// ---------------------- LIVE LOCATION ----------------------
-function startLiveLocation() {
-  if (!ENABLE_LIVE_LOCATION) return;
+function computeBearingDeg(from, to) {
+  const toRad = (x) => (x * Math.PI) / 180;
+  const toDeg = (x) => (x * 180) / Math.PI;
 
+  const lat1 = toRad(from.lat);
+  const lat2 = toRad(to.lat);
+  const dLng = toRad(to.lng - from.lng);
+
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+
+  let brng = toDeg(Math.atan2(y, x));
+  brng = (brng + 360) % 360;
+  return brng;
+}
+
+function addAutoCenterControl() {
+  const ctrl = L.control({ position: "bottomright" });
+  ctrl.onAdd = function () {
+    const btn = L.DomUtil.create("button", "autoCenterBtn");
+    btn.type = "button";
+    btn.textContent = "Auto-center: ON";
+
+    L.DomEvent.disableClickPropagation(btn);
+    L.DomEvent.on(btn, "click", () => {
+      autoCenter = !autoCenter;
+      btn.textContent = autoCenter ? "Auto-center: ON" : "Auto-center: OFF";
+      if (autoCenter && userLatLng) map.panTo(userLatLng, { animate: true });
+    });
+
+    return btn;
+  };
+  ctrl.addTo(map);
+}
+
+function startLocationWatch() {
   if (!("geolocation" in navigator)) {
-    console.warn("Geolocation not supported on this browser.");
+    if (recommendEl) recommendEl.textContent = "Recommended: location not supported";
     return;
   }
 
-  if (gpsWatchId != null) return;
+  navMarker = L.marker([40.7128, -74.0060], {
+    icon: makeNavIcon(),
+    interactive: false,
+    zIndexOffset: 9999,
+  }).addTo(map);
 
-  gpsWatchId = navigator.geolocation.watchPosition(
+  addAutoCenterControl();
+
+  navigator.geolocation.watchPosition(
     (pos) => {
       const lat = pos.coords.latitude;
       const lng = pos.coords.longitude;
-      const acc = pos.coords.accuracy || 0;
+      const heading = pos.coords.heading; // may be null
+      const ts = pos.timestamp || Date.now();
 
-      // Speed and heading can be null on iOS sometimes
-      const speed = (pos.coords.speed == null ? null : Number(pos.coords.speed)); // m/s
-      const heading = (pos.coords.heading == null ? null : Number(pos.coords.heading)); // degrees
+      userLatLng = { lat, lng };
+      if (navMarker) navMarker.setLatLng(userLatLng);
 
-      const nowTs = Date.now();
-      const ll = [lat, lng];
+      // movement + heading
+      let isMoving = false;
 
-      // Determine movement
-      // If speed is null, infer "moving" by distance over time from lastFix
-      let inferredSpeed = speed;
-      let inferredHeading = heading;
+      if (lastPos) {
+        const dMi = haversineMiles({ lat: lastPos.lat, lng: lastPos.lng }, userLatLng);
+        const dtSec = Math.max(1, (ts - lastPos.ts) / 1000);
+        const mph = (dMi / dtSec) * 3600;
 
-      if (lastFix) {
-        const dt = Math.max(1, (nowTs - lastFix.ts) / 1000);
+        isMoving = mph >= 2.0;
 
-        // If heading not provided, compute bearing from last point
-        if (inferredHeading == null) {
-          inferredHeading = bearingDeg(lastFix.lat, lastFix.lng, lat, lng);
+        if (typeof heading === "number" && Number.isFinite(heading)) {
+          lastHeadingDeg = heading;
+        } else if (dMi > 0.01) {
+          lastHeadingDeg = computeBearingDeg({ lat: lastPos.lat, lng: lastPos.lng }, userLatLng);
         }
 
-        // If speed not provided, infer using rough distance (Leaflet has distanceTo)
-        if (inferredSpeed == null) {
-          const p1 = L.latLng(lastFix.lat, lastFix.lng);
-          const p2 = L.latLng(lat, lng);
-          const meters = p1.distanceTo(p2);
-          inferredSpeed = meters / dt;
-        }
-      } else {
-        // First fix: if no heading, default north
-        if (inferredHeading == null) inferredHeading = 0;
-        if (inferredSpeed == null) inferredSpeed = 0;
+        if (isMoving) lastMoveTs = ts;
       }
 
-      const moving = (inferredSpeed >= MOVING_SPEED_MPS);
-      const stationary = (inferredSpeed <= STATIONARY_SPEED_MPS);
+      lastPos = { lat, lng, ts };
 
-      // For in-between speeds, treat as moving (no pulse)
-      const isMovingForStyle = moving && !stationary;
+      setNavRotation(lastHeadingDeg);
+      setNavVisual(isMoving);
 
-      // Build icon HTML
-      const icon = L.divIcon({
-        className: "", // IMPORTANT: prevents Leaflet default marker styling
-        html: buildArrowHTML(inferredHeading ?? 0, isMovingForStyle),
-        iconSize: [34, 34],
-        iconAnchor: [17, 17],
-      });
-
-      if (!myPosMarker) {
-        myPosMarker = L.marker(ll, {
-          icon,
-          interactive: false,
-          keyboard: false,
-          zIndexOffset: 999999,
-        }).addTo(map);
-      } else {
-        myPosMarker.setLatLng(ll);
-        myPosMarker.setIcon(icon); // update rotation + glow/pulse
-      }
-
-      if (!myAccCircle) {
-        myAccCircle = L.circle(ll, {
-          radius: Math.max(10, acc),
-          weight: 1,
-          color: "#0066ff",
-          opacity: 0.25,
-          fillColor: "#0066ff",
-          fillOpacity: 0.06,
-          interactive: false,
-        }).addTo(map);
-      } else {
-        myAccCircle.setLatLng(ll);
-        myAccCircle.setRadius(Math.max(10, acc));
-      }
-
-      // Auto-center behavior
+      // ✅ One-time zoom-in on first GPS fix
       if (!gpsFirstFixDone) {
         gpsFirstFixDone = true;
-        if (autoCenterEnabled) map.setView(ll, map.getZoom(), { animate: true });
+        const targetZoom = Math.max(map.getZoom(), 14);
+        map.setView(userLatLng, targetZoom, { animate: true });
       } else {
-        if (autoCenterEnabled) map.panTo(ll, { animate: true });
+        if (autoCenter) map.panTo(userLatLng, { animate: true });
       }
 
-      lastFix = { lat, lng, ts: nowTs, speedMps: inferredSpeed, headingDeg: inferredHeading };
+      if (currentFrame) updateRecommendation(currentFrame);
     },
     (err) => {
       console.warn("Geolocation error:", err);
+      if (recommendEl) recommendEl.textContent = "Recommended: location blocked (enable it)";
     },
     {
       enableHighAccuracy: true,
-      maximumAge: 3000,
+      maximumAge: 1000,
       timeout: 15000,
     }
   );
+
+  // keep pulse if truly stationary
+  setInterval(() => {
+    const now = Date.now();
+    const recentlyMoved = lastMoveTs && (now - lastMoveTs) < 5000;
+    setNavVisual(!!recentlyMoved);
+  }, 1200);
 }
 
-// ---------------------- BOOT ----------------------
-startLiveLocation();
-
+// Boot
 loadTimeline().catch((err) => {
   console.error(err);
   timeLabel.textContent = `Error loading timeline: ${err.message}`;
 });
+
+startLocationWatch();
