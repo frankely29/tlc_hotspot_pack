@@ -61,11 +61,12 @@
   <div class="legend" id="legend">
     <div class="title">Demand Colors</div>
 
-    <div class="row"><div class="left"><span class="swatch" style="background:#00b050;"></span>Green = Best</div></div>
+    <div class="row"><div class="left"><span class="swatch" style="background:#00b050;"></span>Green = Highest</div></div>
+    <div class="row"><div class="left"><span class="swatch" style="background:#8000ff;"></span>Purple = High</div></div>
     <div class="row"><div class="left"><span class="swatch" style="background:#0066ff;"></span>Blue = Medium</div></div>
     <div class="row"><div class="left"><span class="swatch" style="background:#66ccff;"></span>Sky = Normal</div></div>
     <div class="row"><div class="left"><span class="swatch" style="background:#ffd400;"></span>Yellow = Below Normal</div></div>
-    <div class="row"><div class="left"><span class="swatch" style="background:#e60000;"></span>Red = Avoid</div></div>
+    <div class="row"><div class="left"><span class="swatch" style="background:#e60000;"></span>Red = Very Low / Avoid</div></div>
 
     <div class="sub">
       Colors come from rating (1–100) for the selected 20-minute window.<br/>
@@ -84,7 +85,7 @@
     crossorigin=""
   ></script>
 
-  <!-- cache-buster so iPhone actually loads the new JS -->
-  <script src="app.js?v=9"></script>
+  <!-- cache-buster: bump v when you change app.js -->
+  <script src="app.js?v=10"></script>
 </body>
 </html>
