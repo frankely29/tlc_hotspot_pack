@@ -1,20 +1,15 @@
 const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
 const BIN_MINUTES = 20;
 
-/**
- * ✅ Label policy: show important zones sooner, still decluttered.
- */
-const LABEL_ZOOM_START = 8;      // start showing labels sooner
-const LABEL_ZOOM_ALL = 11;       // allow all buckets (still decluttered)
-const BOROUGH_ZOOM_SHOW = 13;    // show borough line only when zoomed in
-const LABEL_MAX_CHARS_LOW = 11;  // shorten at low zoom
-const LABEL_MAX_CHARS_MID = 15;  // shorten at mid zoom
+// ✅ Show names earlier (less zoom needed), but with demand priority
+const LABEL_ZOOM_START = 7;     // show some labels earlier
+const LABEL_ZOOM_MID = 9;       // show more labels
+const LABEL_ZOOM_ALL = 11;      // allow all (still declutter)
 
-/**
- * Declutter: base padding.
- * We'll apply smaller padding for higher-demand buckets (so they can fit more easily).
- */
-const DECLUTTER_PADDING_BASE = 5;
+// Shortening to prevent long names causing overlaps
+const LABEL_MAX_CHARS_LOW = 12;   // z<=8
+const LABEL_MAX_CHARS_MID = 16;   // z 9-10
+const LABEL_MAX_CHARS_HIGH = 22;  // z>=11
 
 // ---------- Time helpers ----------
 function parseIsoNoTz(iso) {
@@ -93,7 +88,7 @@ async function fetchJSON(url) {
   }
 }
 
-// ---------- Buckets ----------
+// ---------- Buckets / priority ----------
 function prettyBucket(b) {
   const m = {
     green: "Highest",
@@ -116,16 +111,20 @@ function bucketPriority(bucket) {
     default: return 0;
   }
 }
+function bucketAllowedAtZoom(bucket, zoom) {
+  if (zoom < LABEL_ZOOM_START) return false;
 
-// ✅ tighter padding for important buckets so they appear more often
-function declutterPaddingForBucket(bucket) {
-  if (bucket === "green" || bucket === "purple") return 2;
-  if (bucket === "blue") return 3;
-  if (bucket === "sky") return 4;
-  return DECLUTTER_PADDING_BASE; // yellow/red
+  // ✅ demand-priority reveal
+  if (zoom < LABEL_ZOOM_MID) {
+    return bucket === "green" || bucket === "purple" || bucket === "blue";
+  }
+  if (zoom < LABEL_ZOOM_ALL) {
+    return bucket !== "red";
+  }
+  return true;
 }
 
-// ---------- Text / HTML ----------
+// ---------- HTML helpers ----------
 function escapeHtml(s) {
   return String(s)
     .replaceAll("&", "&amp;")
@@ -141,24 +140,9 @@ function shortenLabel(text, maxChars) {
   return t.slice(0, maxChars - 1) + "…";
 }
 function zoomClass(zoom) {
-  const z = Math.max(8, Math.min(14, Math.round(zoom)));
+  const z = Math.max(7, Math.min(14, Math.round(zoom)));
   return `z${z}`;
 }
-
-/**
- * ✅ Bucket visibility by zoom:
- * - z<8: none
- * - z8-9: green/purple/blue ONLY
- * - z10: add sky
- * - z11+: allow all (still declutter)
- */
-function bucketAllowedAtZoom(bucket, zoom) {
-  if (zoom < LABEL_ZOOM_START) return false;
-  if (zoom < 10) return bucket === "green" || bucket === "purple" || bucket === "blue";
-  if (zoom < LABEL_ZOOM_ALL) return bucket !== "red"; // allow most, skip red
-  return true;
-}
-
 function labelHTML(props, zoom) {
   const name = (props.zone_name || "").trim();
   if (!name) return "";
@@ -166,48 +150,118 @@ function labelHTML(props, zoom) {
   const bucket = (props.bucket || "").trim();
   if (!bucketAllowedAtZoom(bucket, zoom)) return "";
 
-  let maxChars = LABEL_MAX_CHARS_MID;
-  if (zoom <= 10) maxChars = LABEL_MAX_CHARS_LOW;
+  let maxChars = LABEL_MAX_CHARS_HIGH;
+  if (zoom <= 8) maxChars = LABEL_MAX_CHARS_LOW;
+  else if (zoom <= 10) maxChars = LABEL_MAX_CHARS_MID;
 
   const zoneText = shortenLabel(name, maxChars);
 
-  const borough = (props.borough || "").trim();
-  const showBorough = zoom >= BOROUGH_ZOOM_SHOW && borough;
-
-  return `
-    <div class="zn">${escapeHtml(zoneText)}</div>
-    ${showBorough ? `<div class="br">${escapeHtml(borough)}</div>` : ""}
-  `;
+  // ✅ Flat label only (like your example). Borough stays in popup only.
+  return `<span class="zn">${escapeHtml(zoneText)}</span>`;
 }
 
-// ---------- Label placement (inside polygon) ----------
-function interiorLabelLatLng(feature) {
+// ---------- Better interior point using polylabel ----------
+function polylabelPoint(feature) {
   try {
-    const pt = turf.polylabel(feature, { precision: 1.0 });
-    const coords = pt?.geometry?.coordinates;
-    if (coords && coords.length === 2) return L.latLng(coords[1], coords[0]);
-  } catch {}
-  try {
-    const pt2 = turf.centerOfMass(feature);
-    const c2 = pt2?.geometry?.coordinates;
-    if (c2 && c2.length === 2) return L.latLng(c2[1], c2[0]);
+    const geom = feature?.geometry;
+    if (!geom) return null;
+
+    // polylabel expects polygon coords: [ [ring], [hole], ... ]
+    if (geom.type === "Polygon") {
+      const p = polylabel(geom.coordinates, 1.0);
+      return L.latLng(p[1], p[0]);
+    }
+
+    if (geom.type === "MultiPolygon") {
+      // choose the polygon with largest area (best label)
+      let best = null;
+      let bestArea = -Infinity;
+
+      for (const poly of geom.coordinates) {
+        const ft = { type: "Feature", geometry: { type: "Polygon", coordinates: poly }, properties: {} };
+        const a = turf.area(ft);
+        if (a > bestArea) {
+          bestArea = a;
+          best = poly;
+        }
+      }
+
+      if (!best) return null;
+      const p = polylabel(best, 1.0);
+      return L.latLng(p[1], p[0]);
+    }
   } catch {}
   return null;
 }
 
-function estimateLabelBox(zoom, zoneText, showBorough) {
-  const z = Math.max(8, Math.min(14, Math.round(zoom)));
-  const charW = (z <= 10) ? 6.0 : (z <= 12 ? 6.5 : 7.0);
-  const padW = 18;
-  const w = Math.min(240, Math.max(56, zoneText.length * charW + padW));
-  const h = showBorough ? (z <= 10 ? 30 : 34) : (z <= 10 ? 20 : 22);
+// ---------- Declutter + keep label fully inside zone ----------
+function estimateLabelBox(zoom, text) {
+  // Approx pixel size for collision + inside-fit checks
+  const z = Math.max(7, Math.min(14, Math.round(zoom)));
+  const charW =
+    (z <= 8) ? 6.0 :
+    (z <= 10) ? 6.6 :
+    (z <= 12) ? 7.0 : 7.4;
+
+  const w = Math.min(220, Math.max(40, text.length * charW + 6));
+  const h =
+    (z <= 8) ? 14 :
+    (z <= 10) ? 16 :
+    (z <= 12) ? 18 : 20;
+
   return { w, h };
 }
 function rectsOverlap(a, b) {
   return !(a.x2 < b.x1 || a.x1 > b.x2 || a.y2 < b.y1 || a.y1 > b.y2);
 }
+function labelBoxFitsInside(feature, centerLatLng, box, pad) {
+  const centerPt = map.latLngToContainerPoint(centerLatLng);
+  const halfW = box.w / 2 + pad;
+  const halfH = box.h / 2 + pad;
 
-// ---------- Leaflet map ----------
+  const cornersPx = [
+    L.point(centerPt.x - halfW, centerPt.y - halfH),
+    L.point(centerPt.x + halfW, centerPt.y - halfH),
+    L.point(centerPt.x + halfW, centerPt.y + halfH),
+    L.point(centerPt.x - halfW, centerPt.y + halfH),
+  ];
+
+  for (const p of cornersPx) {
+    const ll = map.containerPointToLatLng(p);
+    const pt = turf.point([ll.lng, ll.lat]);
+    if (!turf.booleanPointInPolygon(pt, feature)) return false;
+  }
+  return true;
+}
+function findInsidePosition(feature, desiredLatLng, box, pad) {
+  if (labelBoxFitsInside(feature, desiredLatLng, box, pad)) return desiredLatLng;
+
+  const base = map.latLngToContainerPoint(desiredLatLng);
+
+  // Spiral offsets (small to larger)
+  const steps = [6, 10, 14, 18, 24, 30, 38, 48];
+  const dirs = [
+    [1, 0], [-1, 0], [0, 1], [0, -1],
+    [1, 1], [1, -1], [-1, 1], [-1, -1],
+  ];
+
+  for (const d of steps) {
+    for (const [dx, dy] of dirs) {
+      const candPt = L.point(base.x + dx * d, base.y + dy * d);
+      const candLL = map.containerPointToLatLng(candPt);
+
+      const pt = turf.point([candLL.lng, candLL.lat]);
+      if (!turf.booleanPointInPolygon(pt, feature)) continue;
+
+      if (labelBoxFitsInside(feature, candLL, box, pad)) return candLL;
+    }
+  }
+
+  // fallback for very skinny zones
+  return desiredLatLng;
+}
+
+// ---------- Map ----------
 const slider = document.getElementById("slider");
 const timeLabel = document.getElementById("timeLabel");
 
@@ -282,23 +336,17 @@ function renderLabels(frame) {
     if (!name) continue;
     if (!bucketAllowedAtZoom(bucket, zoomNow)) continue;
 
-    let maxChars = LABEL_MAX_CHARS_MID;
-    if (zoomNow <= 10) maxChars = LABEL_MAX_CHARS_LOW;
-    const zoneText = shortenLabel(name, maxChars);
-
-    const borough = (props.borough || "").trim();
-    const showBorough = zoomNow >= BOROUGH_ZOOM_SHOW && !!borough;
-
-    const latlng = interiorLabelLatLng(f);
-    if (!latlng) continue;
-
     const pickups = Number(props.pickups || 0);
     const pr = bucketPriority(bucket);
 
-    candidates.push({ props, bucket, pickups, pr, zoneText, showBorough, latlng });
+    // point inside zone (polylabel)
+    const latlng0 = polylabelPoint(f) || null;
+    if (!latlng0) continue;
+
+    candidates.push({ feature: f, props, bucket, pickups, pr, latlng0 });
   }
 
-  // ✅ Important: sort so top-demand wins collision wars
+  // ✅ Important zones first
   candidates.sort((a, b) => {
     if (b.pr !== a.pr) return b.pr - a.pr;
     return b.pickups - a.pickups;
@@ -310,11 +358,20 @@ function renderLabels(frame) {
     const html = labelHTML(c.props, zoomNow);
     if (!html) continue;
 
-    const pad = declutterPaddingForBucket(c.bucket);
+    // Extract plain text length for sizing
+    let maxChars = LABEL_MAX_CHARS_HIGH;
+    if (zoomNow <= 8) maxChars = LABEL_MAX_CHARS_LOW;
+    else if (zoomNow <= 10) maxChars = LABEL_MAX_CHARS_MID;
+    const labelText = shortenLabel((c.props.zone_name || "").trim(), maxChars);
 
-    const pt = map.latLngToContainerPoint(c.latlng);
-    const box = estimateLabelBox(zoomNow, c.zoneText, c.showBorough);
+    const pad = (c.bucket === "green" || c.bucket === "purple") ? 2 : 4;
+    const box = estimateLabelBox(zoomNow, labelText);
 
+    // ✅ move label so it fits inside polygon
+    const latlng = findInsidePosition(c.feature, c.latlng0, box, pad);
+
+    // Declutter collisions (screen space)
+    const pt = map.latLngToContainerPoint(latlng);
     const rect = {
       x1: pt.x - box.w / 2 - pad,
       y1: pt.y - box.h / 2 - pad,
@@ -331,12 +388,12 @@ function renderLabels(frame) {
     occupied.push(rect);
 
     const icon = L.divIcon({
-      className: `zone-label ${zClass} bucket-${c.bucket}`,
+      className: `zone-label-flat ${zClass}`,
       html,
       iconSize: null,
     });
 
-    L.marker(c.latlng, { icon, interactive: false }).addTo(labelLayer);
+    L.marker(latlng, { icon, interactive: false }).addTo(labelLayer);
   }
 }
 
