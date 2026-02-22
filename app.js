@@ -1,15 +1,32 @@
 const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
 const BIN_MINUTES = 20;
 
-// LABEL VISIBILITY (balanced for mobile)
-const LABEL_ZOOM_TOP = 10;        // start showing labels (green/purple only)
-const LABEL_ZOOM_ALL = 12;        // show all zone labels
-const BOROUGH_ZOOM_SHOW = 13;     // show borough line starting zoom >= 13
+// LABEL VISIBILITY (mobile-friendly, demand-priority)
+const LABEL_ZOOM_MIN = 10;        // below this: no labels at all
+const BOROUGH_ZOOM_SHOW = 14;     // borough line only when zoomed in enough
 const LABEL_MAX_CHARS_MID = 14;   // shorten zone names at mid zoom
 
-// Context overlay (separate from TLC data)
-const CONTEXT_TYPES = "concerts,nightlife,restaurants";
-const CONTEXT_TTL_MS = 5 * 60 * 1000; // client-side TTL to reduce calls
+// Demand priority label rules by zoom:
+// z10: green only
+// z11: green + purple
+// z12: + blue
+// z13: + sky
+// z14: + yellow
+// z15+: + red (everything)
+function shouldShowLabel(bucket, zoom) {
+  if (zoom < LABEL_ZOOM_MIN) return false;
+
+  // Normalize bucket string
+  const b = (bucket || "").trim();
+
+  if (zoom >= 15) return true; // all
+  if (zoom === 14) return b !== "red";
+  if (zoom === 13) return b === "green" || b === "purple" || b === "blue" || b === "sky";
+  if (zoom === 12) return b === "green" || b === "purple" || b === "blue";
+  if (zoom === 11) return b === "green" || b === "purple";
+  // zoom === 10
+  return b === "green";
+}
 
 // ---------- Time helpers ----------
 function parseIsoNoTz(iso) {
@@ -101,19 +118,15 @@ function prettyBucket(b) {
   return m[b] || (b ?? "");
 }
 
-// ---------- Label logic ----------
+// ---------- Label helpers ----------
 function shortenLabel(text, maxChars) {
   const t = (text || "").trim();
   if (!t) return "";
   if (t.length <= maxChars) return t;
   return t.slice(0, maxChars - 1) + "…";
 }
-function shouldShowLabel(bucket, zoom) {
-  if (zoom < LABEL_ZOOM_TOP) return false;
-  if (zoom < LABEL_ZOOM_ALL) return bucket === "green" || bucket === "purple";
-  return true;
-}
 function zoomClass(zoom) {
+  // Clamp to classes defined in CSS: z10..z15
   const z = Math.max(10, Math.min(15, Math.round(zoom)));
   return `z${z}`;
 }
@@ -122,9 +135,10 @@ function labelHTML(props, zoom) {
   if (!name) return "";
 
   const bucket = (props.bucket || "").trim();
-  if (!shouldShowLabel(bucket, zoom)) return "";
+  if (!shouldShowLabel(bucket, Math.round(zoom))) return "";
 
-  const zoneText = zoom < LABEL_ZOOM_ALL ? shortenLabel(name, LABEL_MAX_CHARS_MID) : name;
+  // Shorten at lower zooms
+  const zoneText = zoom < 13 ? shortenLabel(name, LABEL_MAX_CHARS_MID) : name;
 
   const borough = (props.borough || "").trim();
   const showBorough = zoom >= BOROUGH_ZOOM_SHOW && borough;
@@ -158,92 +172,6 @@ let geoLayer = null;
 let timeline = [];
 let minutesOfWeek = [];
 let currentFrame = null;
-
-// ---------- Context overlay (separate layer) ----------
-const contextLayer = L.layerGroup().addTo(map);
-let contextEnabled = false;
-
-// small client cache (bboxKey -> {ts, payload})
-const _contextClientCache = new Map();
-function _bboxKeyForCache() {
-  const b = map.getBounds();
-  // rounding keeps keys stable while panning a little
-  const minLng = b.getWest().toFixed(3);
-  const minLat = b.getSouth().toFixed(3);
-  const maxLng = b.getEast().toFixed(3);
-  const maxLat = b.getNorth().toFixed(3);
-  const z = map.getZoom();
-  return `${minLng},${minLat},${maxLng},${maxLat}|z=${z}|types=${CONTEXT_TYPES}`;
-}
-
-function getBBoxString() {
-  const b = map.getBounds();
-  return `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
-}
-
-function clearContext() {
-  contextLayer.clearLayers();
-}
-
-function contextIcon(type) {
-  if (type === "concert") return "🎵";
-  if (type === "nightlife") return "🍸";
-  if (type === "restaurants") return "🍽️";
-  return "📍";
-}
-
-function markerForContextItem(item) {
-  const icon = contextIcon(item.type);
-  const name = item.name || "";
-  const source = item.source || "";
-  const venue = item.venue || "";
-  const start = item.start || "";
-
-  const m = L.marker([item.lat, item.lng], { title: name });
-
-  const extraConcert =
-    item.type === "concert"
-      ? `<div><b>Venue:</b> ${escapeHtml(venue)}</div><div><b>Start:</b> ${escapeHtml(start)}</div>`
-      : "";
-
-  m.bindPopup(`
-    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; font-size:13px;">
-      <div style="font-weight:800;">${icon} ${escapeHtml(name)}</div>
-      <div style="opacity:0.75;">${escapeHtml(item.type || "")} • ${escapeHtml(source)}</div>
-      ${extraConcert}
-    </div>
-  `);
-
-  return m;
-}
-
-async function loadContextOverlay() {
-  if (!contextEnabled) return;
-
-  const key = _bboxKeyForCache();
-  const cached = _contextClientCache.get(key);
-  const now = Date.now();
-  if (cached && (now - cached.ts) < CONTEXT_TTL_MS) {
-    // render from cache
-    clearContext();
-    for (const item of (cached.payload.items || [])) {
-      markerForContextItem(item).addTo(contextLayer);
-    }
-    return;
-  }
-
-  const bbox = getBBoxString();
-  const url = `${RAILWAY_BASE}/context?bbox=${encodeURIComponent(bbox)}&types=${encodeURIComponent(CONTEXT_TYPES)}`;
-
-  const payload = await fetchJSON(url);
-
-  _contextClientCache.set(key, { ts: now, payload });
-
-  clearContext();
-  for (const item of (payload.items || [])) {
-    markerForContextItem(item).addTo(contextLayer);
-  }
-}
 
 // Popup
 function buildPopupHTML(props) {
@@ -333,13 +261,6 @@ async function loadTimeline() {
 // Re-render on zoom (no network)
 map.on("zoomend", () => {
   if (currentFrame) renderFrame(currentFrame);
-  // overlay can refresh too (separate from TLC data)
-  loadContextOverlay().catch(console.error);
-});
-
-// Refresh overlay when you pan (separate layer)
-map.on("moveend", () => {
-  loadContextOverlay().catch(console.error);
 });
 
 // Debounced slider
@@ -349,17 +270,6 @@ slider.addEventListener("input", () => {
   if (sliderDebounce) clearTimeout(sliderDebounce);
   sliderDebounce = setTimeout(() => loadFrame(idx).catch(console.error), 80);
 });
-
-// Toggle button (needs a button with id="toggleContext" in index.html)
-const toggleBtn = document.getElementById("toggleContext");
-if (toggleBtn) {
-  toggleBtn.addEventListener("click", () => {
-    contextEnabled = !contextEnabled;
-    toggleBtn.textContent = contextEnabled ? "Places/Events: ON" : "Places/Events: OFF";
-    if (!contextEnabled) clearContext();
-    else loadContextOverlay().catch(console.error);
-  });
-}
 
 // Boot
 loadTimeline().catch((err) => {
