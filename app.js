@@ -148,7 +148,7 @@ function labelHTML(props, zoom) {
   const zoneText = zoom < 13 ? shortenLabel(name, LABEL_MAX_CHARS_MID) : name;
 
   const borough = (props.borough || "").trim();
-  const showBorough = zoom >= 15 && borough; // CSS also hides it for z<15
+  const showBorough = zoom >= BOROUGH_ZOOM_SHOW && borough; // CSS also hides it for z<15
 
   return `
     <div class="zn">${escapeHtml(zoneText)}</div>
@@ -389,7 +389,10 @@ let lastPos = null;
 let lastHeadingDeg = 0;
 let lastMoveTs = 0;
 
-// IMPORTANT: When user interacts with map, stop auto-center
+// UI: Auto-center button (we store it here)
+let autoCenterBtnEl = null;
+
+// IMPORTANT FIX: guard autoCenterBtnEl (so no crash before button exists)
 function disableAutoCenterOnUserPan() {
   autoCenter = false;
   if (autoCenterBtnEl) autoCenterBtnEl.textContent = "Auto-center: OFF";
@@ -438,7 +441,6 @@ function computeBearingDeg(from, to) {
 }
 
 // UI: Auto-center button
-let autoCenterBtnEl = null;
 function addAutoCenterControl() {
   const ctrl = L.control({ position: "bottomright" });
   ctrl.onAdd = function () {
@@ -512,7 +514,6 @@ function startLocationWatch() {
         const targetZoom = Math.max(map.getZoom(), 14);
         map.setView(userLatLng, targetZoom, { animate: true });
       } else {
-        // Only pan if autoCenter is ON (and user didn't disable by exploring)
         if (autoCenter) map.panTo(userLatLng, { animate: true });
       }
 
