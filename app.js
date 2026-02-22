@@ -1,10 +1,10 @@
 const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
 const BIN_MINUTES = 20;
 
-// Label rules (Fix A: show labels later to avoid clutter when zoomed out)
-const LABEL_ZOOM_TOP = 12;      // show ONLY green/purple at zoom 12–13
-const LABEL_ZOOM_ALL = 14;      // show ALL labels at zoom >= 14
-const LABEL_MAX_CHARS_MID = 14; // shorten labels at mid zoom (optional tuning)
+// Label rules (balanced: not crowded, not too zoomed-in)
+const LABEL_ZOOM_TOP = 10;      // show ONLY green/purple at zoom 10–11
+const LABEL_ZOOM_ALL = 12;      // show ALL labels at zoom >= 12
+const LABEL_MAX_CHARS_MID = 14; // shorten labels at mid zoom (optional)
 
 // ---------- Time helpers ----------
 function parseIsoNoTz(iso) {
@@ -111,16 +111,12 @@ function shortenLabel(text, maxChars) {
 }
 
 function shouldShowLabel(bucket, zoom) {
-  // zoomed out: no labels
-  if (zoom < LABEL_ZOOM_TOP) return false;
-
-  // mid zoom: show only best zones to avoid clutter
+  if (zoom < LABEL_ZOOM_TOP) return false; // zoomed out: no labels
   if (zoom < LABEL_ZOOM_ALL) {
+    // mid zoom: best zones only
     return bucket === "green" || bucket === "purple";
   }
-
-  // zoomed in: show all
-  return true;
+  return true; // zoomed in: all labels
 }
 
 // ---------- Leaflet map ----------
@@ -173,7 +169,7 @@ function renderFrame(frame) {
     geoLayer = null;
   }
 
-  const zoom = map.getZoom();
+  const zoomNow = map.getZoom();
 
   geoLayer = L.geoJSON(frame.polygons, {
     style: (feature) => {
@@ -190,10 +186,7 @@ function renderFrame(frame) {
       const props = feature.properties || {};
       layer.bindPopup(buildPopupHTML(props), { maxWidth: 300 });
 
-      // Zoom-scaled labels (Fix A)
       const bucket = (props.bucket || "").trim();
-      const zoomNow = zoom;
-
       if (!shouldShowLabel(bucket, zoomNow)) return;
 
       const name = (props.zone_name || "").trim();
@@ -236,7 +229,7 @@ async function loadTimeline() {
   await loadFrame(idx);
 }
 
-// Re-render labels on zoom (no network)
+// Re-render on zoom (no network)
 map.on("zoomend", () => {
   if (currentFrame) renderFrame(currentFrame);
 });
