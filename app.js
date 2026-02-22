@@ -4,26 +4,6 @@ const BIN_MINUTES = 20;
 // Refresh current frame every 5 minutes
 const REFRESH_MS = 5 * 60 * 1000;
 
-// -------------------- RESET (optional) --------------------
-// If you ever get “stuck” with bad saved settings, open:
-// https://YOUR_GITHUB_PAGE/?reset=1
-// It clears saved toggles once.
-(function maybeResetPrefs() {
-  try {
-    const sp = new URLSearchParams(location.search);
-    if (sp.get("reset") === "1") {
-      localStorage.removeItem("tlc_recenter_user_set");
-      localStorage.removeItem("tlc_rotate_user_set");
-      localStorage.removeItem("tlc_recenter_on");
-      localStorage.removeItem("tlc_rotate_on");
-      sp.delete("reset");
-      const qs = sp.toString();
-      const newUrl = location.pathname + (qs ? `?${qs}` : "") + location.hash;
-      location.replace(newUrl);
-    }
-  } catch {}
-})();
-
 // ---------- Legend minimize ----------
 const legendEl = document.getElementById("legend");
 const legendToggleBtn = document.getElementById("legendToggle");
@@ -168,7 +148,7 @@ function labelHTML(props, zoom) {
   const zoneText = zoom < 13 ? shortenLabel(name, LABEL_MAX_CHARS_MID) : name;
 
   const borough = (props.borough || "").trim();
-  const showBorough = zoom >= BOROUGH_ZOOM_SHOW && borough;
+  const showBorough = zoom >= 15 && borough; // CSS also hides it for z<15
 
   return `
     <div class="zn">${escapeHtml(zoneText)}</div>
@@ -400,140 +380,24 @@ slider.addEventListener("input", () => {
   sliderDebounce = setTimeout(() => loadFrame(idx).catch(console.error), 80);
 });
 
-// ---------- Bottom toggles (INSIDE slider box) ----------
-const btnCenter = document.getElementById("btnCenter");
-const btnRotate = document.getElementById("btnRotate");
-
-// IMPORTANT FIX:
-// - Default ON always
-// - Only save to localStorage when YOU press the buttons
-// - Auto-disable recenter while exploring does NOT get saved
-const LS_CENTER_USERSET = "tlc_recenter_user_set";
-const LS_ROTATE_USERSET = "tlc_rotate_user_set";
-const LS_CENTER = "tlc_recenter_on";
-const LS_ROTATE = "tlc_rotate_on";
-
-function lsGet(key) { try { return localStorage.getItem(key); } catch { return null; } }
-function lsSet(key, val) { try { localStorage.setItem(key, val); } catch {} }
-
-let recenterOn = true;
-let rotateOn = true;
-
-// If user has explicitly set prefs before, honor them. Otherwise default ON.
-if (lsGet(LS_CENTER_USERSET) === "1") recenterOn = lsGet(LS_CENTER) === "1";
-if (lsGet(LS_ROTATE_USERSET) === "1") rotateOn = lsGet(LS_ROTATE) === "1";
-
-function setBtnState(btn, on) {
-  if (!btn) return;
-  btn.classList.toggle("on", !!on);
-}
-function syncToggleUI() {
-  if (btnCenter) {
-    btnCenter.textContent = recenterOn ? "Recenter: ON" : "Recenter: OFF";
-    setBtnState(btnCenter, recenterOn);
-  }
-  if (btnRotate) {
-    btnRotate.textContent = rotateOn ? "Rotate: ON" : "Rotate: OFF";
-    setBtnState(btnRotate, rotateOn);
-  }
-}
-syncToggleUI();
-
-if (btnCenter) {
-  btnCenter.addEventListener("click", () => {
-    recenterOn = !recenterOn;
-    lsSet(LS_CENTER_USERSET, "1");
-    lsSet(LS_CENTER, recenterOn ? "1" : "0");
-    syncToggleUI();
-    if (recenterOn && userLatLng) map.panTo(userLatLng, { animate: true });
-  });
-}
-
-if (btnRotate) {
-  btnRotate.addEventListener("click", async () => {
-    rotateOn = !rotateOn;
-    lsSet(LS_ROTATE_USERSET, "1");
-    lsSet(LS_ROTATE, rotateOn ? "1" : "0");
-    syncToggleUI();
-
-    if (rotateOn) {
-      await requestCompassPermissionIfNeeded();
-      applySynchronizedRotation();
-    } else {
-      resetMapRotation();
-      // with rotate off: arrow shows heading instead
-      setNavRotation(lastHeadingDeg);
-    }
-  });
-}
-
-// If user drags/zooms map, stop recentering so you can explore.
-// DO NOT persist this change.
-function disableRecenterBecauseUserIsExploring() {
-  if (!recenterOn) return;
-  recenterOn = false;
-  syncToggleUI();
-}
-map.on("dragstart", disableRecenterBecauseUserIsExploring);
-map.on("zoomstart", disableRecenterBecauseUserIsExploring);
-
-// ---------- Map rotation (rotate panes only, NOT the UI boxes) ----------
-// IMPORTANT FIX: do NOT rotate markerPane, otherwise your arrow marker rotates with the map and breaks sync.
-function panesToRotate() {
-  return [
-    map.getPane("tilePane"),
-    map.getPane("overlayPane"),
-    map.getPane("shadowPane"),
-    // map.getPane("markerPane"),   // ❌ exclude
-    map.getPane("tooltipPane"),
-    map.getPane("popupPane"),
-  ].filter(Boolean);
-}
-
-function applyMapRotationDegrees(headingDeg) {
-  if (!rotateOn) return;
-  const rot = -headingDeg; // heading-up
-
-  for (const p of panesToRotate()) {
-    p.style.transformOrigin = "50% 50%";
-    p.style.transition = "transform 140ms linear";
-    p.style.transform = `rotate(${rot}deg) translateZ(0)`;
-    p.style.webkitTransform = `rotate(${rot}deg) translateZ(0)`;
-    p.style.backfaceVisibility = "hidden";
-    p.style.webkitBackfaceVisibility = "hidden";
-    p.style.willChange = "transform";
-  }
-}
-
-function resetMapRotation() {
-  for (const p of panesToRotate()) {
-    p.style.transition = "";
-    p.style.transform = "";
-    p.style.webkitTransform = "";
-    p.style.willChange = "";
-  }
-}
-
-// ---------- Live location arrow ----------
-let navMarker = null;
+// ---------- Live location arrow + auto-center ----------
+let autoCenter = true;
 let gpsFirstFixDone = false;
 
-let lastPos = null; // {lat,lng,ts}
+let navMarker = null;
+let lastPos = null;
 let lastHeadingDeg = 0;
 let lastMoveTs = 0;
 
-// Compass fallback (device orientation)
-let compassHeadingDeg = null;
-
-// iOS Safari sometimes requires permission
-async function requestCompassPermissionIfNeeded() {
-  try {
-    if (typeof DeviceOrientationEvent === "undefined") return;
-    if (typeof DeviceOrientationEvent.requestPermission !== "function") return;
-    const res = await DeviceOrientationEvent.requestPermission();
-    return res;
-  } catch {}
+// IMPORTANT: When user interacts with map, stop auto-center
+function disableAutoCenterOnUserPan() {
+  autoCenter = false;
+  if (autoCenterBtnEl) autoCenterBtnEl.textContent = "Auto-center: OFF";
 }
+
+// Leaflet events for user navigation
+map.on("dragstart", disableAutoCenterOnUserPan);
+map.on("zoomstart", disableAutoCenterOnUserPan);
 
 function makeNavIcon() {
   return L.divIcon({
@@ -551,24 +415,10 @@ function setNavVisual(isMoving) {
   el.classList.toggle("navPulse", !isMoving);
 }
 
-// Arrow rotation behavior:
-// - Rotate ON (map rotates): arrow stays UP (0deg) so it’s a clean “nav arrow”
-// - Rotate OFF (north-up map): arrow rotates to heading
 function setNavRotation(deg) {
   const el = document.getElementById("navWrap");
   if (!el) return;
-
-  if (rotateOn) {
-    el.style.transform = `rotate(0deg)`;
-  } else {
-    el.style.transform = `rotate(${deg}deg)`;
-  }
-}
-
-// Keep arrow + map synchronized
-function applySynchronizedRotation() {
-  setNavRotation(lastHeadingDeg);
-  if (rotateOn) applyMapRotationDegrees(lastHeadingDeg);
+  el.style.transform = `rotate(${deg}deg)`;
 }
 
 function computeBearingDeg(from, to) {
@@ -587,24 +437,28 @@ function computeBearingDeg(from, to) {
   return brng;
 }
 
-// Compass listener
-function startCompass() {
-  const handler = (e) => {
-    if (typeof e.webkitCompassHeading === "number" && Number.isFinite(e.webkitCompassHeading)) {
-      compassHeadingDeg = e.webkitCompassHeading;
-      return;
-    }
-    if (typeof e.alpha === "number" && Number.isFinite(e.alpha)) {
-      compassHeadingDeg = (360 - e.alpha) % 360;
-      return;
-    }
-  };
+// UI: Auto-center button
+let autoCenterBtnEl = null;
+function addAutoCenterControl() {
+  const ctrl = L.control({ position: "bottomright" });
+  ctrl.onAdd = function () {
+    const btn = L.DomUtil.create("button", "autoCenterBtn");
+    autoCenterBtnEl = btn;
+    btn.type = "button";
+    btn.textContent = "Auto-center: ON";
 
-  window.addEventListener("deviceorientationabsolute", handler, true);
-  window.addEventListener("deviceorientation", handler, true);
+    L.DomEvent.disableClickPropagation(btn);
+    L.DomEvent.on(btn, "click", () => {
+      autoCenter = !autoCenter;
+      btn.textContent = autoCenter ? "Auto-center: ON" : "Auto-center: OFF";
+      if (autoCenter && userLatLng) map.panTo(userLatLng, { animate: true });
+    });
+
+    return btn;
+  };
+  ctrl.addTo(map);
 }
 
-// ---------- Geolocation watch ----------
 function startLocationWatch() {
   if (!("geolocation" in navigator)) {
     if (recommendEl) recommendEl.textContent = "Recommended: location not supported";
@@ -617,11 +471,13 @@ function startLocationWatch() {
     zIndexOffset: 9999,
   }).addTo(map);
 
+  addAutoCenterControl();
+
   navigator.geolocation.watchPosition(
     (pos) => {
       const lat = pos.coords.latitude;
       const lng = pos.coords.longitude;
-      const gpsHeading = pos.coords.heading;
+      const heading = pos.coords.heading;
       const ts = pos.timestamp || Date.now();
 
       userLatLng = { lat, lng };
@@ -635,31 +491,29 @@ function startLocationWatch() {
         const mph = (dMi / dtSec) * 3600;
 
         isMoving = mph >= 2.0;
-        if (isMoving) lastMoveTs = ts;
 
-        if (isMoving && typeof gpsHeading === "number" && Number.isFinite(gpsHeading)) {
-          lastHeadingDeg = gpsHeading;
+        if (typeof heading === "number" && Number.isFinite(heading)) {
+          lastHeadingDeg = heading;
         } else if (dMi > 0.01) {
           lastHeadingDeg = computeBearingDeg({ lat: lastPos.lat, lng: lastPos.lng }, userLatLng);
-        } else if (typeof compassHeadingDeg === "number") {
-          lastHeadingDeg = compassHeadingDeg;
         }
-      } else {
-        if (typeof compassHeadingDeg === "number") lastHeadingDeg = compassHeadingDeg;
+
+        if (isMoving) lastMoveTs = ts;
       }
 
       lastPos = { lat, lng, ts };
 
-      applySynchronizedRotation();
+      setNavRotation(lastHeadingDeg);
       setNavVisual(isMoving);
 
-      // Zoom to you on first fix
+      // one-time zoom to you on first fix
       if (!gpsFirstFixDone) {
         gpsFirstFixDone = true;
         const targetZoom = Math.max(map.getZoom(), 14);
         map.setView(userLatLng, targetZoom, { animate: true });
       } else {
-        if (recenterOn) map.panTo(userLatLng, { animate: true });
+        // Only pan if autoCenter is ON (and user didn't disable by exploring)
+        if (autoCenter) map.panTo(userLatLng, { animate: true });
       }
 
       if (currentFrame) updateRecommendation(currentFrame);
@@ -675,16 +529,10 @@ function startLocationWatch() {
     }
   );
 
-  // stationary pulse + compass heading updates
   setInterval(() => {
     const now = Date.now();
     const recentlyMoved = lastMoveTs && (now - lastMoveTs) < 5000;
     setNavVisual(!!recentlyMoved);
-
-    if (!recentlyMoved && typeof compassHeadingDeg === "number") {
-      lastHeadingDeg = compassHeadingDeg;
-      applySynchronizedRotation();
-    }
   }, 1200);
 }
 
@@ -705,5 +553,4 @@ loadTimeline().catch((err) => {
   timeLabel.textContent = `Error loading timeline: ${err.message}`;
 });
 
-startCompass();
 startLocationWatch();
