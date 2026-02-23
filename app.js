@@ -4,9 +4,7 @@ const BIN_MINUTES = 20;
 // Refresh current frame every 5 minutes
 const REFRESH_MS = 5 * 60 * 1000;
 
-/* ===========================
-   Legend minimize
-=========================== */
+// ---------- Legend minimize ----------
 const legendEl = document.getElementById("legend");
 const legendToggleBtn = document.getElementById("legendToggle");
 if (legendEl && legendToggleBtn) {
@@ -16,15 +14,14 @@ if (legendEl && legendToggleBtn) {
   });
 }
 
-/* ===========================
-   LABEL VISIBILITY (demand priority)
-   z10: green only
-   z11: green + purple
-   z12: + blue
-   z13: + sky
-   z14: + yellow
-   z15+: + red (everything)
-=========================== */
+/** LABEL VISIBILITY (mobile-friendly, demand-priority)
+ * z10: green only
+ * z11: green + purple
+ * z12: + blue
+ * z13: + sky
+ * z14: + yellow
+ * z15+: + red (everything)
+ */
 const LABEL_ZOOM_MIN = 10;
 const BOROUGH_ZOOM_SHOW = 15;
 const LABEL_MAX_CHARS_MID = 14;
@@ -32,7 +29,6 @@ const LABEL_MAX_CHARS_MID = 14;
 function shouldShowLabel(bucket, zoom) {
   if (zoom < LABEL_ZOOM_MIN) return false;
   const b = (bucket || "").trim();
-
   if (zoom >= 15) return true;
   if (zoom === 14) return b !== "red";
   if (zoom === 13) return b === "green" || b === "purple" || b === "blue" || b === "sky";
@@ -41,9 +37,7 @@ function shouldShowLabel(bucket, zoom) {
   return b === "green";
 }
 
-/* ===========================
-   Time helpers (NYC)
-=========================== */
+// ---------- Time helpers ----------
 function parseIsoNoTz(iso) {
   const [d, t] = iso.split("T");
   const [Y, M, D] = d.split("-").map(Number);
@@ -108,9 +102,7 @@ function pickClosestIndex(minutesOfWeekArr, target) {
   return bestIdx;
 }
 
-/* ===========================
-   Network
-=========================== */
+// ---------- Network ----------
 async function fetchJSON(url) {
   const res = await fetch(url, { cache: "no-store", mode: "cors" });
   const text = await res.text();
@@ -122,9 +114,7 @@ async function fetchJSON(url) {
   }
 }
 
-/* ===========================
-   Bucket label
-=========================== */
+// ---------- Bucket label ----------
 function prettyBucket(b) {
   const m = {
     green: "Highest",
@@ -137,9 +127,7 @@ function prettyBucket(b) {
   return m[b] || (b ?? "");
 }
 
-/* ===========================
-   Label helpers
-=========================== */
+// ---------- Label helpers ----------
 function shortenLabel(text, maxChars) {
   const t = (text || "").trim();
   if (!t) return "";
@@ -176,9 +164,7 @@ function escapeHtml(s) {
     .replaceAll("'", "&#039;");
 }
 
-/* ===========================
-   Recommendation helpers
-=========================== */
+// ---------- Recommendation helpers ----------
 const recommendEl = document.getElementById("recommendLine");
 let userLatLng = null;
 
@@ -277,9 +263,7 @@ function updateRecommendation(frame) {
   recommendEl.textContent = `Recommended: ${best.name}${bTxt} — Rating ${best.rating} — ${distTxt}`;
 }
 
-/* ===========================
-   Leaflet map
-=========================== */
+// ---------- Leaflet map ----------
 const slider = document.getElementById("slider");
 const timeLabel = document.getElementById("timeLabel");
 
@@ -295,98 +279,7 @@ let timeline = [];
 let minutesOfWeek = [];
 let currentFrame = null;
 
-/* ===========================
-   Auto-center button INSIDE slider box
-   - No duplication
-   - Default ON
-   - Click always works
-=========================== */
-let autoCenter = true;
-let autoCenterBtn = null;
-
-function ensureAutoCenterButton() {
-  // If your HTML already has a button, use it:
-  autoCenterBtn =
-    document.getElementById("btnCenter") ||
-    document.getElementById("autoCenterBtn") ||
-    document.getElementById("btnAutoCenter");
-
-  const sliderWrap = document.querySelector(".sliderWrap") || document.body;
-
-  // If no button exists, create it INSIDE slider box
-  if (!autoCenterBtn) {
-    autoCenterBtn = document.createElement("button");
-    autoCenterBtn.type = "button";
-    autoCenterBtn.id = "btnCenter";
-    autoCenterBtn.textContent = "Auto-center: ON";
-
-    // Small + does NOT increase box height much
-    autoCenterBtn.style.position = "absolute";
-    autoCenterBtn.style.right = "12px";
-    autoCenterBtn.style.top = "10px";
-    autoCenterBtn.style.zIndex = "1100";
-    autoCenterBtn.style.border = "none";
-    autoCenterBtn.style.borderRadius = "999px";
-    autoCenterBtn.style.padding = "6px 10px";
-    autoCenterBtn.style.fontFamily = "system-ui,-apple-system,Segoe UI,Roboto,Arial";
-    autoCenterBtn.style.fontWeight = "900";
-    autoCenterBtn.style.fontSize = "12px";
-    autoCenterBtn.style.background = "rgba(255,255,255,0.95)";
-    autoCenterBtn.style.boxShadow = "0 6px 18px rgba(0,0,0,0.18)";
-    autoCenterBtn.style.cursor = "pointer";
-
-    // Make sure sliderWrap can position absolute children
-    const cs = getComputedStyle(sliderWrap);
-    if (cs.position === "static") sliderWrap.style.position = "absolute";
-
-    sliderWrap.appendChild(autoCenterBtn);
-  }
-
-  syncAutoCenterBtn();
-
-  // Make sure Leaflet doesn't swallow the tap
-  if (window.L && L.DomEvent) {
-    L.DomEvent.disableClickPropagation(autoCenterBtn);
-    L.DomEvent.disableScrollPropagation(autoCenterBtn);
-  }
-
-  // Strong stopPropagation for mobile/Tesla browsers
-  autoCenterBtn.addEventListener("pointerdown", (e) => {
-    e.stopPropagation();
-  });
-  autoCenterBtn.addEventListener("touchstart", (e) => {
-    e.stopPropagation();
-  }, { passive: true });
-
-  autoCenterBtn.addEventListener("click", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    autoCenter = !autoCenter;
-    syncAutoCenterBtn();
-
-    if (autoCenter && userLatLng) map.panTo(userLatLng, { animate: true });
-  });
-}
-
-function syncAutoCenterBtn() {
-  if (!autoCenterBtn) return;
-  autoCenterBtn.textContent = autoCenter ? "Auto-center: ON" : "Auto-center: OFF";
-  autoCenterBtn.style.outline = autoCenter ? "2px solid rgba(0,160,255,0.40)" : "none";
-}
-
-// If user drags/zooms the map, stop auto-center so they can explore
-function disableAutoCenterOnUserPan() {
-  if (!autoCenter) return;
-  autoCenter = false;
-  syncAutoCenterBtn();
-}
-map.on("dragstart", disableAutoCenterOnUserPan);
-map.on("zoomstart", disableAutoCenterOnUserPan);
-
-/* ===========================
-   Popup
-=========================== */
+// Popup
 function buildPopupHTML(props) {
   const zoneName = (props.zone_name || "").trim();
   const borough = (props.borough || "").trim();
@@ -407,9 +300,6 @@ function buildPopupHTML(props) {
   `;
 }
 
-/* ===========================
-   Render frame
-=========================== */
 function renderFrame(frame) {
   currentFrame = frame;
   timeLabel.textContent = formatNYCLabel(frame.time);
@@ -489,12 +379,51 @@ slider.addEventListener("input", () => {
   sliderDebounce = setTimeout(() => loadFrame(idx).catch(console.error), 80);
 });
 
-/* ===========================
-   Live location arrow + auto-center
-=========================== */
-let navMarker = null;
-let gpsFirstFixDone = false;
+/* =========================
+   Auto-center (single button, no duplicates)
+   ========================= */
+const btnCenter = document.getElementById("btnCenter");
+let autoCenter = true;
 
+function syncCenterButton() {
+  if (!btnCenter) return;
+  btnCenter.textContent = autoCenter ? "Auto-center: ON" : "Auto-center: OFF";
+  btnCenter.classList.toggle("on", !!autoCenter);
+}
+
+// Prevent Leaflet/Tesla from eating the click/tap
+if (btnCenter) {
+  btnCenter.addEventListener("pointerdown", (e) => e.stopPropagation());
+  btnCenter.addEventListener("touchstart", (e) => e.stopPropagation(), { passive: true });
+
+  btnCenter.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    autoCenter = !autoCenter;
+    syncCenterButton();
+
+    if (autoCenter && userLatLng) {
+      map.panTo(userLatLng, { animate: true });
+    }
+  });
+}
+syncCenterButton();
+
+// If user explores the map, turn auto-center OFF
+function disableAutoCenterBecauseUserIsExploring() {
+  if (!autoCenter) return;
+  autoCenter = false;
+  syncCenterButton();
+}
+map.on("dragstart", disableAutoCenterBecauseUserIsExploring);
+map.on("zoomstart", disableAutoCenterBecauseUserIsExploring);
+
+/* =========================
+   Live location arrow + auto-center
+========================= */
+let gpsFirstFixDone = false;
+let navMarker = null;
 let lastPos = null;
 let lastHeadingDeg = 0;
 let lastMoveTs = 0;
@@ -582,11 +511,13 @@ function startLocationWatch() {
       setNavRotation(lastHeadingDeg);
       setNavVisual(isMoving);
 
+      // One-time zoom to you on first fix
       if (!gpsFirstFixDone) {
         gpsFirstFixDone = true;
         const targetZoom = Math.max(map.getZoom(), 14);
         map.setView(userLatLng, targetZoom, { animate: true });
       } else {
+        // Only pan if auto-center is ON
         if (autoCenter) map.panTo(userLatLng, { animate: true });
       }
 
@@ -610,9 +541,7 @@ function startLocationWatch() {
   }, 1200);
 }
 
-/* ===========================
-   Auto-refresh every 5 minutes
-=========================== */
+// ---------- Auto-refresh every 5 minutes ----------
 async function refreshCurrentFrame() {
   try {
     const idx = Number(slider.value || "0");
@@ -623,11 +552,7 @@ async function refreshCurrentFrame() {
 }
 setInterval(refreshCurrentFrame, REFRESH_MS);
 
-/* ===========================
-   Boot
-=========================== */
-ensureAutoCenterButton();
-
+// Boot
 loadTimeline().catch((err) => {
   console.error(err);
   timeLabel.textContent = `Error loading timeline: ${err.message}`;
