@@ -238,7 +238,6 @@ function updateRecommendation(frame) {
   }
 
   const DIST_PENALTY_PER_MILE = 2.0;
-
   let best = null;
 
   for (const f of feats) {
@@ -297,27 +296,67 @@ let minutesOfWeek = [];
 let currentFrame = null;
 
 /* ===========================
-   Auto-center button (INSIDE bottom box)
-   - Default ON every refresh
-   - Click works reliably (stopPropagation)
+   Auto-center button INSIDE slider box
+   - No duplication
+   - Default ON
+   - Click always works
 =========================== */
-const autoCenterBtn =
-  document.getElementById("btnCenter") ||
-  document.getElementById("autoCenterBtn") ||
-  document.getElementById("btnAutoCenter");
+let autoCenter = true;
+let autoCenterBtn = null;
 
-let autoCenter = true; // DEFAULT ON
+function ensureAutoCenterButton() {
+  // If your HTML already has a button, use it:
+  autoCenterBtn =
+    document.getElementById("btnCenter") ||
+    document.getElementById("autoCenterBtn") ||
+    document.getElementById("btnAutoCenter");
 
-function syncAutoCenterBtn() {
-  if (!autoCenterBtn) return;
-  autoCenterBtn.textContent = autoCenter ? "Auto-center: ON" : "Auto-center: OFF";
-  autoCenterBtn.classList.toggle("on", !!autoCenter);
-}
+  const sliderWrap = document.querySelector(".sliderWrap") || document.body;
 
-if (autoCenterBtn) {
-  // Prevent Leaflet from stealing the tap/drag
-  L.DomEvent.disableClickPropagation(autoCenterBtn);
-  L.DomEvent.disableScrollPropagation(autoCenterBtn);
+  // If no button exists, create it INSIDE slider box
+  if (!autoCenterBtn) {
+    autoCenterBtn = document.createElement("button");
+    autoCenterBtn.type = "button";
+    autoCenterBtn.id = "btnCenter";
+    autoCenterBtn.textContent = "Auto-center: ON";
+
+    // Small + does NOT increase box height much
+    autoCenterBtn.style.position = "absolute";
+    autoCenterBtn.style.right = "12px";
+    autoCenterBtn.style.top = "10px";
+    autoCenterBtn.style.zIndex = "1100";
+    autoCenterBtn.style.border = "none";
+    autoCenterBtn.style.borderRadius = "999px";
+    autoCenterBtn.style.padding = "6px 10px";
+    autoCenterBtn.style.fontFamily = "system-ui,-apple-system,Segoe UI,Roboto,Arial";
+    autoCenterBtn.style.fontWeight = "900";
+    autoCenterBtn.style.fontSize = "12px";
+    autoCenterBtn.style.background = "rgba(255,255,255,0.95)";
+    autoCenterBtn.style.boxShadow = "0 6px 18px rgba(0,0,0,0.18)";
+    autoCenterBtn.style.cursor = "pointer";
+
+    // Make sure sliderWrap can position absolute children
+    const cs = getComputedStyle(sliderWrap);
+    if (cs.position === "static") sliderWrap.style.position = "absolute";
+
+    sliderWrap.appendChild(autoCenterBtn);
+  }
+
+  syncAutoCenterBtn();
+
+  // Make sure Leaflet doesn't swallow the tap
+  if (window.L && L.DomEvent) {
+    L.DomEvent.disableClickPropagation(autoCenterBtn);
+    L.DomEvent.disableScrollPropagation(autoCenterBtn);
+  }
+
+  // Strong stopPropagation for mobile/Tesla browsers
+  autoCenterBtn.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+  });
+  autoCenterBtn.addEventListener("touchstart", (e) => {
+    e.stopPropagation();
+  }, { passive: true });
 
   autoCenterBtn.addEventListener("click", (e) => {
     e.preventDefault();
@@ -328,14 +367,15 @@ if (autoCenterBtn) {
 
     if (autoCenter && userLatLng) map.panTo(userLatLng, { animate: true });
   });
-
-  // Force correct state on page load
-  syncAutoCenterBtn();
-} else {
-  console.warn("Auto-center button not found. Check index.html button id (btnCenter).");
 }
 
-// If user drags/zooms the map, stop auto-center (so you can explore)
+function syncAutoCenterBtn() {
+  if (!autoCenterBtn) return;
+  autoCenterBtn.textContent = autoCenter ? "Auto-center: ON" : "Auto-center: OFF";
+  autoCenterBtn.style.outline = autoCenter ? "2px solid rgba(0,160,255,0.40)" : "none";
+}
+
+// If user drags/zooms the map, stop auto-center so they can explore
 function disableAutoCenterOnUserPan() {
   if (!autoCenter) return;
   autoCenter = false;
@@ -368,7 +408,7 @@ function buildPopupHTML(props) {
 }
 
 /* ===========================
-   Render a frame
+   Render frame
 =========================== */
 function renderFrame(frame) {
   currentFrame = frame;
@@ -542,7 +582,6 @@ function startLocationWatch() {
       setNavRotation(lastHeadingDeg);
       setNavVisual(isMoving);
 
-      // one-time zoom to you on first fix
       if (!gpsFirstFixDone) {
         gpsFirstFixDone = true;
         const targetZoom = Math.max(map.getZoom(), 14);
@@ -564,7 +603,6 @@ function startLocationWatch() {
     }
   );
 
-  // Keep pulse state when stationary
   setInterval(() => {
     const now = Date.now();
     const recentlyMoved = lastMoveTs && (now - lastMoveTs) < 5000;
@@ -588,6 +626,8 @@ setInterval(refreshCurrentFrame, REFRESH_MS);
 /* ===========================
    Boot
 =========================== */
+ensureAutoCenterButton();
+
 loadTimeline().catch((err) => {
   console.error(err);
   timeLabel.textContent = `Error loading timeline: ${err.message}`;
