@@ -379,19 +379,26 @@ slider.addEventListener("input", () => {
   sliderDebounce = setTimeout(() => loadFrame(idx).catch(console.error), 80);
 });
 
-/* =========================
-   Auto-center (single button, no duplicates)
-   ========================= */
+/* =========================================================
+   Auto-center button (FIXED: don't auto-disable on GPS setView/panTo)
+   ========================================================= */
 const btnCenter = document.getElementById("btnCenter");
 let autoCenter = true;
+
+// When we move the map programmatically, ignore zoomstart/dragstart for a moment
+let suppressAutoDisableUntil = 0;
+function suppressAutoDisableFor(ms, fn) {
+  suppressAutoDisableUntil = Date.now() + ms;
+  fn();
+}
 
 function syncCenterButton() {
   if (!btnCenter) return;
   btnCenter.textContent = autoCenter ? "Auto-center: ON" : "Auto-center: OFF";
   btnCenter.classList.toggle("on", !!autoCenter);
 }
+syncCenterButton();
 
-// Prevent Leaflet/Tesla from eating the click/tap
 if (btnCenter) {
   btnCenter.addEventListener("pointerdown", (e) => e.stopPropagation());
   btnCenter.addEventListener("touchstart", (e) => e.stopPropagation(), { passive: true });
@@ -404,14 +411,16 @@ if (btnCenter) {
     syncCenterButton();
 
     if (autoCenter && userLatLng) {
-      map.panTo(userLatLng, { animate: true });
+      suppressAutoDisableFor(800, () => map.panTo(userLatLng, { animate: true }));
     }
   });
 }
-syncCenterButton();
 
 // If user explores the map, turn auto-center OFF
 function disableAutoCenterBecauseUserIsExploring() {
+  // Ignore the events caused by OUR OWN map moves (GPS setView/panTo)
+  if (Date.now() < suppressAutoDisableUntil) return;
+
   if (!autoCenter) return;
   autoCenter = false;
   syncCenterButton();
@@ -421,7 +430,7 @@ map.on("zoomstart", disableAutoCenterBecauseUserIsExploring);
 
 /* =========================
    Live location arrow + auto-center
-========================= */
+   ========================= */
 let gpsFirstFixDone = false;
 let navMarker = null;
 let lastPos = null;
@@ -511,14 +520,15 @@ function startLocationWatch() {
       setNavRotation(lastHeadingDeg);
       setNavVisual(isMoving);
 
-      // One-time zoom to you on first fix
+      // one-time zoom to you on first fix (DON'T accidentally disable auto-center)
       if (!gpsFirstFixDone) {
         gpsFirstFixDone = true;
         const targetZoom = Math.max(map.getZoom(), 14);
-        map.setView(userLatLng, targetZoom, { animate: true });
+        suppressAutoDisableFor(1200, () => map.setView(userLatLng, targetZoom, { animate: true }));
       } else {
-        // Only pan if auto-center is ON
-        if (autoCenter) map.panTo(userLatLng, { animate: true });
+        if (autoCenter) {
+          suppressAutoDisableFor(700, () => map.panTo(userLatLng, { animate: true }));
+        }
       }
 
       if (currentFrame) updateRecommendation(currentFrame);
