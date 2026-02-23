@@ -4,6 +4,14 @@ const BIN_MINUTES = 20;
 // Refresh current frame every 5 minutes
 const REFRESH_MS = 5 * 60 * 1000;
 
+// Persisted settings
+const LS_AUTOCENTER = "tlc_autocenter";
+const LS_COMPASS = "tlc_compass";
+
+// Tesla browser is often older Chromium; compass events may be missing/blocked.
+const UA = navigator.userAgent || "";
+const IS_TESLA = /Tesla/i.test(UA);
+
 // ---------- Legend minimize ----------
 const legendEl = document.getElementById("legend");
 const legendToggleBtn = document.getElementById("legendToggle");
@@ -14,7 +22,7 @@ if (legendEl && legendToggleBtn) {
   });
 }
 
-/** LABEL VISIBILITY (demand-priority)
+/** LABEL VISIBILITY (mobile-friendly, demand-priority)
  * z10: green only
  * z11: green + purple
  * z12: + blue
@@ -217,6 +225,7 @@ function updateRecommendation(frame) {
     recommendEl.textContent = "Recommended: enable location to get suggestions";
     return;
   }
+
   const feats = frame?.polygons?.features || [];
   if (!feats.length) {
     recommendEl.textContent = "Recommended: …";
@@ -390,111 +399,72 @@ async function refreshCurrentFrame() {
 }
 setInterval(refreshCurrentFrame, REFRESH_MS);
 
-// ---------- Live location arrow + Auto-center (button inside slider box) ----------
-let autoCenter = true;         // MUST start ON
-let gpsFirstFixDone = false;
+// =========================================================
+// LIVE LOCATION ARROW (rotates) + Auto-center toggle
+// - Map is NOT rotated (prevents disappearing tiles on Tesla).
+// =========================================================
 
 const btnAutoCenter = document.getElementById("btnAutoCenter");
-function setAutoCenterUI() {
-  if (!btnAutoCenter) return;
-  btnAutoCenter.textContent = autoCenter ? "Auto-center: ON" : "Auto-center: OFF";
-  btnAutoCenter.classList.toggle("on", autoCenter);
+const btnCompass = document.getElementById("btnCompass");
+
+// Defaults:
+// - Auto-center ON by default
+// - Compass ON by default on iPhone, OFF by default on Tesla
+let autoCenter = (localStorage.getItem(LS_AUTOCENTER) ?? "1") === "1";
+let compassOn = (localStorage.getItem(LS_COMPASS) ?? (IS_TESLA ? "0" : "1")) === "1";
+
+function paintBtn(btn, on, textOn, textOff) {
+  if (!btn) return;
+  btn.classList.toggle("on", !!on);
+  btn.textContent = on ? textOn : textOff;
 }
+
+function saveAutoCenter() {
+  localStorage.setItem(LS_AUTOCENTER, autoCenter ? "1" : "0");
+}
+function saveCompass() {
+  localStorage.setItem(LS_COMPASS, compassOn ? "1" : "0");
+}
+
+paintBtn(btnAutoCenter, autoCenter, "Auto-center: ON", "Auto-center: OFF");
+paintBtn(btnCompass, compassOn, "Compass: ON", "Compass: OFF");
+
 if (btnAutoCenter) {
   btnAutoCenter.addEventListener("click", () => {
     autoCenter = !autoCenter;
-    setAutoCenterUI();
+    saveAutoCenter();
+    paintBtn(btnAutoCenter, autoCenter, "Auto-center: ON", "Auto-center: OFF");
     if (autoCenter && userLatLng) map.panTo(userLatLng, { animate: true });
   });
 }
-setAutoCenterUI();
 
-// If user interacts with map, auto-center OFF (so you can explore)
-function disableAutoCenterBecauseUserIsExploring() {
-  if (!autoCenter) return;
-  autoCenter = false;
-  setAutoCenterUI();
-}
-map.on("dragstart", disableAutoCenterBecauseUserIsExploring);
-map.on("zoomstart", disableAutoCenterBecauseUserIsExploring);
+let compassListenerAdded = false;
 
-// ---------- Compass / rotation (SAFE: never overwrite Leaflet transforms) ----------
-let compassOn = false;       // MUST start OFF (iPhone needs user gesture for permission)
-let headingDeg = 0;          // 0..360, 0 = North
-let compassHeadingDeg = null;
-
-const btnCompass = document.getElementById("btnCompass");
-function setCompassUI() {
-  if (!btnCompass) return;
-  btnCompass.textContent = compassOn ? "Compass: ON" : "Compass: OFF";
-  btnCompass.classList.toggle("on", compassOn);
-}
-setCompassUI();
-
-function stripRotateFromTransform(transformStr) {
-  if (!transformStr) return "";
-  // remove any rotate(...) we previously added
-  return transformStr.replace(/rotate\([^)]+\)/g, "").trim();
-}
-
-function applyMapRotation() {
-  // Rotate "mapPane" only, by APPENDING rotate() to Leaflet's current transform.
-  // This avoids breaking Leaflet panning/zooming.
-  const mapPane = map._mapPane;
-  if (!mapPane) return;
-
-  const base = stripRotateFromTransform(mapPane.style.transform || "");
-  if (!compassOn) {
-    mapPane.style.transform = base; // no rotation
-    return;
-  }
-
-  // Heading-up: rotate map opposite of heading.
-  const rot = -headingDeg;
-  mapPane.style.transformOrigin = "50% 50%";
-  mapPane.style.transform = `${base} rotate(${rot}deg)`.trim();
-}
-
-// Keep rotation applied even as Leaflet updates transforms during movement.
-let rotRaf = 0;
-function scheduleApplyRotation() {
-  if (rotRaf) return;
-  rotRaf = requestAnimationFrame(() => {
-    rotRaf = 0;
-    applyMapRotation();
-  });
-}
-map.on("move", scheduleApplyRotation);
-map.on("zoom", scheduleApplyRotation);
-map.on("resize", scheduleApplyRotation);
-
-// DeviceOrientation permission + listener (iOS Safari needs a user gesture)
-async function requestOrientationPermissionIfNeeded() {
+// iOS Safari: requestPermission must be called from a user gesture
+async function requestCompassPermissionIfNeeded() {
   try {
     if (typeof DeviceOrientationEvent === "undefined") return true;
-    if (typeof DeviceOrientationEvent.requestPermission !== "function") return true;
+    if (typeof DeviceOrientationEvent.requestPermission !== "function") return true; // not iOS permission model
     const res = await DeviceOrientationEvent.requestPermission();
     return res === "granted";
-  } catch (e) {
-    console.warn("Orientation permission error:", e);
+  } catch {
     return false;
   }
 }
 
 function startCompassListener() {
-  // iOS: e.webkitCompassHeading is best when available.
-  const handler = (e) => {
-    if (!compassOn) return;
+  if (compassListenerAdded) return;
+  compassListenerAdded = true;
 
+  const handler = (e) => {
+    // iOS Safari
     if (typeof e.webkitCompassHeading === "number" && Number.isFinite(e.webkitCompassHeading)) {
-      compassHeadingDeg = e.webkitCompassHeading; // 0..360
+      compassHeadingDeg = e.webkitCompassHeading;
       return;
     }
-
-    // Fallback: alpha (often 0..360)
+    // Fallback (many browsers)
     if (typeof e.alpha === "number" && Number.isFinite(e.alpha)) {
-      // Convert to compass-like heading.
-      // Many browsers give alpha clockwise from north, but it varies.
+      // alpha can be relative; still useful as a “facing” hint
       compassHeadingDeg = (360 - e.alpha) % 360;
       return;
     }
@@ -506,32 +476,51 @@ function startCompassListener() {
 
 if (btnCompass) {
   btnCompass.addEventListener("click", async () => {
-    // Toggle
-    const next = !compassOn;
+    compassOn = !compassOn;
+    saveCompass();
+    paintBtn(btnCompass, compassOn, "Compass: ON", "Compass: OFF");
 
-    if (next) {
-      const ok = await requestOrientationPermissionIfNeeded();
+    if (compassOn) {
+      const ok = await requestCompassPermissionIfNeeded();
       if (!ok) {
         compassOn = false;
-        setCompassUI();
+        saveCompass();
+        paintBtn(btnCompass, compassOn, "Compass: ON", "Compass: OFF");
+        alert("Compass permission not granted. Compass stays OFF.");
         return;
       }
-      compassOn = true;
-      setCompassUI();
-      applyMapRotation();
-    } else {
-      compassOn = false;
-      setCompassUI();
-      applyMapRotation();
+      startCompassListener();
     }
   });
 }
-startCompassListener();
 
-// ---------- Arrow marker ----------
+// Stop auto-center when user explores map
+function disableAutoCenterOnUserPan() {
+  if (!autoCenter) return;
+  autoCenter = false;
+  saveAutoCenter();
+  paintBtn(btnAutoCenter, autoCenter, "Auto-center: ON", "Auto-center: OFF");
+}
+map.on("dragstart", disableAutoCenterOnUserPan);
+map.on("zoomstart", disableAutoCenterOnUserPan);
+
+// Arrow marker
 let navMarker = null;
-let lastPos = null;
+let gpsFirstFixDone = false;
+
+let lastPos = null; // {lat,lng,ts}
+let lastHeadingDeg = 0;
 let lastMoveTs = 0;
+
+let compassHeadingDeg = null;
+
+// Simple smoothing to reduce jitter
+let smoothedHeading = 0;
+function smoothAngle(prev, next, alpha) {
+  // shortest-path interpolation around 360
+  const diff = ((((next - prev) % 360) + 540) % 360) - 180;
+  return (prev + diff * alpha + 360) % 360;
+}
 
 function makeNavIcon() {
   return L.divIcon({
@@ -541,17 +530,20 @@ function makeNavIcon() {
     iconAnchor: [15, 15],
   });
 }
+
 function setNavVisual(isMoving) {
   const el = document.getElementById("navWrap");
   if (!el) return;
   el.classList.toggle("navMoving", !!isMoving);
   el.classList.toggle("navPulse", !isMoving);
 }
+
 function setNavRotation(deg) {
   const el = document.getElementById("navWrap");
   if (!el) return;
   el.style.transform = `rotate(${deg}deg)`;
 }
+
 function computeBearingDeg(from, to) {
   const toRad = (x) => (x * Math.PI) / 180;
   const toDeg = (x) => (x * 180) / Math.PI;
@@ -568,7 +560,6 @@ function computeBearingDeg(from, to) {
   return brng;
 }
 
-// ---------- Geolocation watch ----------
 function startLocationWatch() {
   if (!("geolocation" in navigator)) {
     if (recommendEl) recommendEl.textContent = "Recommended: location not supported";
@@ -581,6 +572,10 @@ function startLocationWatch() {
     zIndexOffset: 9999,
   }).addTo(map);
 
+  // If compass is ON at load, add listener (permission may still be required on iOS,
+  // but it will simply not produce values until granted).
+  if (compassOn) startCompassListener();
+
   navigator.geolocation.watchPosition(
     (pos) => {
       const lat = pos.coords.latitude;
@@ -592,6 +587,7 @@ function startLocationWatch() {
       if (navMarker) navMarker.setLatLng(userLatLng);
 
       let isMoving = false;
+      let computedHeading = null;
 
       if (lastPos) {
         const dMi = haversineMiles({ lat: lastPos.lat, lng: lastPos.lng }, userLatLng);
@@ -601,40 +597,31 @@ function startLocationWatch() {
         isMoving = mph >= 2.0;
         if (isMoving) lastMoveTs = ts;
 
-        // Determine heading:
-        // 1) If compassOn and we have a compass reading, use it even if stationary.
-        // 2) Else if moving and GPS provides heading, use it.
-        // 3) Else if moving, compute bearing from last->current.
-        if (compassOn && typeof compassHeadingDeg === "number" && Number.isFinite(compassHeadingDeg)) {
-          headingDeg = compassHeadingDeg;
-        } else if (isMoving && typeof gpsHeading === "number" && Number.isFinite(gpsHeading)) {
-          headingDeg = gpsHeading;
+        // Prefer GPS heading when moving and available
+        if (isMoving && typeof gpsHeading === "number" && Number.isFinite(gpsHeading)) {
+          computedHeading = gpsHeading;
         } else if (dMi > 0.01) {
-          headingDeg = computeBearingDeg({ lat: lastPos.lat, lng: lastPos.lng }, userLatLng);
+          computedHeading = computeBearingDeg({ lat: lastPos.lat, lng: lastPos.lng }, userLatLng);
+        } else if (compassOn && typeof compassHeadingDeg === "number") {
+          computedHeading = compassHeadingDeg;
         }
       } else {
-        // first fix: if compass already has data, use it
-        if (typeof compassHeadingDeg === "number" && Number.isFinite(compassHeadingDeg)) {
-          headingDeg = compassHeadingDeg;
-        }
+        // First point: compass if available
+        if (compassOn && typeof compassHeadingDeg === "number") computedHeading = compassHeadingDeg;
       }
 
       lastPos = { lat, lng, ts };
 
-      // Arrow behavior:
-      // - If compass/map rotation ON: arrow stays pointing UP (like real nav map).
-      // - If compass OFF: arrow rotates to direction of travel.
-      if (compassOn) {
-        setNavRotation(0);
-        applyMapRotation();
-      } else {
-        setNavRotation(headingDeg);
-        applyMapRotation(); // will clear rotation if off
+      if (typeof computedHeading === "number" && Number.isFinite(computedHeading)) {
+        lastHeadingDeg = computedHeading;
       }
 
+      // Smooth the arrow rotation (less jitter)
+      smoothedHeading = smoothAngle(smoothedHeading, lastHeadingDeg, 0.25);
+      setNavRotation(smoothedHeading);
       setNavVisual(isMoving);
 
-      // one-time zoom to you on first fix
+      // One-time zoom to you
       if (!gpsFirstFixDone) {
         gpsFirstFixDone = true;
         const targetZoom = Math.max(map.getZoom(), 14);
@@ -656,17 +643,17 @@ function startLocationWatch() {
     }
   );
 
-  // keep pulse if recently moved
+  // Stationary pulse + stationary compass refresh for arrow
   setInterval(() => {
     const now = Date.now();
     const recentlyMoved = lastMoveTs && (now - lastMoveTs) < 5000;
     setNavVisual(!!recentlyMoved);
 
-    // If compass is ON and we have compass data, keep rotating map while stationary
-    if (compassOn && typeof compassHeadingDeg === "number" && Number.isFinite(compassHeadingDeg)) {
-      headingDeg = compassHeadingDeg;
-      applyMapRotation();
-      setNavRotation(0);
+    // If stationary and compass is ON, keep arrow synced to compass
+    if (!recentlyMoved && compassOn && typeof compassHeadingDeg === "number") {
+      lastHeadingDeg = compassHeadingDeg;
+      smoothedHeading = smoothAngle(smoothedHeading, lastHeadingDeg, 0.20);
+      setNavRotation(smoothedHeading);
     }
   }, 1200);
 }
