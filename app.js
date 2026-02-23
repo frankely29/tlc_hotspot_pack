@@ -1,11 +1,3 @@
-// app.js (FULL)
-// NYC TLC Hotspot Map frontend
-// - Pulls timeline + frames from Railway
-// - Demand-colored polygons + demand-priority labels
-// - Live location arrow + Auto-center toggle INSIDE bottom slider box
-// - Recommendation line in legend (data-driven)
-// - Refreshes current frame every 5 minutes
-
 const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
 const BIN_MINUTES = 20;
 
@@ -156,7 +148,7 @@ function labelHTML(props, zoom) {
   const zoneText = zoom < 13 ? shortenLabel(name, LABEL_MAX_CHARS_MID) : name;
 
   const borough = (props.borough || "").trim();
-  const showBorough = zoom >= BOROUGH_ZOOM_SHOW && borough; // CSS also hides for z<15
+  const showBorough = zoom >= BOROUGH_ZOOM_SHOW && borough;
 
   return `
     <div class="zn">${escapeHtml(zoneText)}</div>
@@ -210,8 +202,7 @@ function geometryCenter(geom) {
 
   if (!pts.length) return null;
 
-  let sumLng = 0,
-    sumLat = 0;
+  let sumLng = 0, sumLat = 0;
   for (const [lng, lat] of pts) {
     sumLng += lng;
     sumLat += lat;
@@ -232,11 +223,9 @@ function updateRecommendation(frame) {
     return;
   }
 
-  // Purely data-driven but realistic: rating minus distance penalty, plus hard avoid for red.
   const DIST_PENALTY_PER_MILE = 2.0;
 
   let best = null;
-
   for (const f of feats) {
     const props = f.properties || {};
     const geom = f.geometry;
@@ -278,7 +267,7 @@ function updateRecommendation(frame) {
 const slider = document.getElementById("slider");
 const timeLabel = document.getElementById("timeLabel");
 
-const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.006], 11);
+const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 11);
 
 L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
   attribution: "&copy; OpenStreetMap &copy; CARTO",
@@ -390,36 +379,47 @@ slider.addEventListener("input", () => {
   sliderDebounce = setTimeout(() => loadFrame(idx).catch(console.error), 80);
 });
 
-// ---------- Live location arrow + auto-center (inside slider box) ----------
-
-// DEFAULT: ON
+// ---------- Auto-center (SINGLE button inside slider) ----------
 let autoCenter = true;
 let gpsFirstFixDone = false;
 
-let navMarker = null;
-let lastPos = null;
-let lastHeadingDeg = 0;
-let lastMoveTs = 0;
-
-// Button is in index.html inside sliderWrap:
 const autoCenterBtnEl = document.getElementById("btnAutoCenter");
-
 function syncAutoCenterBtn() {
   if (!autoCenterBtnEl) return;
   autoCenterBtnEl.textContent = autoCenter ? "Auto-center ON" : "Auto-center OFF";
   autoCenterBtnEl.classList.toggle("off", !autoCenter);
 }
+syncAutoCenterBtn();
 
-// IMPORTANT: When user interacts with map, stop auto-center (so you can explore)
+if (autoCenterBtnEl) {
+  autoCenterBtnEl.addEventListener("click", () => {
+    autoCenter = !autoCenter;
+    syncAutoCenterBtn();
+    if (autoCenter && userLatLng) map.panTo(userLatLng, { animate: true });
+  });
+}
+
+// If user drags/zooms, stop auto-center so you can explore
 function disableAutoCenterOnUserPan() {
   if (!autoCenter) return;
   autoCenter = false;
   syncAutoCenterBtn();
 }
-
-// Leaflet events for user navigation
 map.on("dragstart", disableAutoCenterOnUserPan);
 map.on("zoomstart", disableAutoCenterOnUserPan);
+
+// ---------- HARD cleanup: remove any old Leaflet control button still present ----------
+function removeOldAutoCenterControls() {
+  // old code used class "autoCenterBtn" on a leaflet control button
+  document.querySelectorAll(".autoCenterBtn").forEach((el) => el.remove());
+}
+removeOldAutoCenterControls();
+
+// ---------- Live location arrow ----------
+let navMarker = null;
+let lastPos = null;
+let lastHeadingDeg = 0;
+let lastMoveTs = 0;
 
 function makeNavIcon() {
   return L.divIcon({
@@ -465,27 +465,17 @@ function startLocationWatch() {
     return;
   }
 
-  navMarker = L.marker([40.7128, -74.006], {
+  navMarker = L.marker([40.7128, -74.0060], {
     icon: makeNavIcon(),
     interactive: false,
     zIndexOffset: 9999,
   }).addTo(map);
 
-  // Wire up button
-  if (autoCenterBtnEl) {
-    autoCenterBtnEl.addEventListener("click", () => {
-      autoCenter = !autoCenter;
-      syncAutoCenterBtn();
-      if (autoCenter && userLatLng) map.panTo(userLatLng, { animate: true });
-    });
-  }
-  syncAutoCenterBtn(); // set initial text/visual
-
   navigator.geolocation.watchPosition(
     (pos) => {
       const lat = pos.coords.latitude;
       const lng = pos.coords.longitude;
-      const heading = pos.coords.heading; // can be null unless moving
+      const heading = pos.coords.heading;
       const ts = pos.timestamp || Date.now();
 
       userLatLng = { lat, lng };
@@ -514,13 +504,11 @@ function startLocationWatch() {
       setNavRotation(lastHeadingDeg);
       setNavVisual(isMoving);
 
-      // one-time zoom to you on first fix
       if (!gpsFirstFixDone) {
         gpsFirstFixDone = true;
         const targetZoom = Math.max(map.getZoom(), 14);
         map.setView(userLatLng, targetZoom, { animate: true });
       } else {
-        // Only pan if autoCenter is ON
         if (autoCenter) map.panTo(userLatLng, { animate: true });
       }
 
@@ -537,10 +525,9 @@ function startLocationWatch() {
     }
   );
 
-  // keep glow/pulse state sensible
   setInterval(() => {
     const now = Date.now();
-    const recentlyMoved = lastMoveTs && now - lastMoveTs < 5000;
+    const recentlyMoved = lastMoveTs && (now - lastMoveTs) < 5000;
     setNavVisual(!!recentlyMoved);
   }, 1200);
 }
