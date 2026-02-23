@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>NYC TLC Hotspot Map</title>
 
-  <!-- Leaflet -->
   <link
     rel="stylesheet"
     href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -22,126 +21,115 @@
     html, body { height: 100%; margin: 0; }
     #map { height: 100vh; width: 100vw; }
 
-    /* =========================================================
-       Legend box (top-left) -- ~50% smaller
-       ========================================================= */
+    /* Legend */
     .legend {
       position: absolute;
-      top: 8px;
-      left: 8px;
+      top: 10px;
+      left: 10px;
       z-index: 1000;
       background: rgba(255,255,255,0.92);
-      padding: 5px 6px 5px 6px;
-      border-radius: 10px;
+      padding: 8px 8px 7px 8px;
+      border-radius: 12px;
       box-shadow: 0 6px 18px rgba(0,0,0,0.15);
       font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
-      max-width: 170px;
+      max-width: 240px;
     }
     .legendHeader{
       display:flex;
       align-items:center;
       justify-content:space-between;
-      gap:8px;
-      margin-bottom:4px;
+      gap:10px;
+      margin-bottom:6px;
     }
     .legend h3 {
       margin: 0;
-      font-size: 12px;
-      font-weight: 950;
+      font-size: 14px;
+      font-weight: 900;
     }
     .legendToggleBtn{
       border: none;
       background: rgba(0,0,0,0.06);
       border-radius: 10px;
-      padding: 4px 8px;
+      padding: 6px 10px;
       font-weight: 950;
-      font-size: 12px;
+      font-size: 13px;
       cursor: pointer;
-      line-height: 1;
     }
     .legendToggleBtn:active{ transform: scale(0.98); }
-
     .legendBody{ display:block; }
     .legend.minimized .legendBody{ display:none; }
 
     .legend .recommendLine{
-      margin: 0 0 5px 0;
-      font-size: 9px;
-      font-weight: 950;
+      margin: 0 0 6px 0;
+      font-size: 11px;
+      font-weight: 900;
       opacity: 0.92;
       line-height: 1.15;
     }
     .legend .row {
       display: flex;
       align-items: center;
-      gap: 6px;
-      margin: 4px 0;
-      font-size: 10px;
-      font-weight: 900;
-    }
-    .legend .swatch {
-      width: 10px;
-      height: 10px;
-      border-radius: 3px;
-      border: 1px solid rgba(0,0,0,0.15);
-      flex: 0 0 10px;
-    }
-    .legend .sub {
-      margin-top: 6px;
-      font-size: 9px;
-      opacity: 0.85;
-      line-height: 1.2;
+      gap: 8px;
+      margin: 5px 0;
+      font-size: 13px;
       font-weight: 800;
     }
+    .legend .swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 4px;
+      border: 1px solid rgba(0,0,0,0.15);
+      flex: 0 0 14px;
+    }
+    .legend .sub {
+      margin-top: 7px;
+      font-size: 11px;
+      opacity: 0.85;
+      line-height: 1.25;
+      font-weight: 700;
+    }
 
-    /* =========================================================
-       Bottom slider bar (moved DOWN a bit more)
-       ========================================================= */
+    /* Bottom box */
     .sliderWrap {
       position: absolute;
-      left: 8px;
-      right: 8px;
-
-      /* closer to the bottom, but still safe on iPhone */
-      bottom: calc(env(safe-area-inset-bottom) + 2px);
-
+      left: 10px;
+      right: 10px;
+      bottom: 6px;
       z-index: 1000;
       background: rgba(255,255,255,0.92);
       border-radius: 14px;
       box-shadow: 0 6px 18px rgba(0,0,0,0.15);
-      padding: 7px 9px 9px 9px;
+      padding: 8px 10px 10px 10px;
       font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
     }
-
-    .sliderTopRow{
+    .timeRow{
       display:flex;
       align-items:center;
       justify-content:space-between;
       gap:10px;
-      margin-bottom: 6px;
+      margin-bottom:6px;
     }
     .timeLabel {
-      font-size: 16px;
+      font-size: 18px;
       font-weight: 950;
       margin: 0;
-      line-height: 1.1;
     }
 
-    /* Auto-center button INSIDE slider box, above slider (won't block dragging) */
-    .centerBtn{
-      border: none;
+    /* Auto-center button INSIDE box, above slider */
+    #btnCenter{
+      border:none;
       border-radius: 999px;
-      padding: 7px 10px;
-      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
+      padding: 8px 10px;
       font-weight: 950;
       font-size: 12px;
-      cursor: pointer;
       background: rgba(255,255,255,0.95);
       box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+      cursor:pointer;
       white-space: nowrap;
+      flex: 0 0 auto;
     }
-    .centerBtn:active { transform: scale(0.98); }
-    .centerBtn.on { outline: 2px solid rgba(0,160,255,0.45); }
+    #btnCenter.on { outline: 2px solid rgba(0,160,255,0.45); }
+    #btnCenter:active { transform: scale(0.98); }
 
     input[type="range"] {
       width: 100%;
@@ -149,20 +137,9 @@
       margin: 0;
     }
 
-    /* =========================================================
-       Zone labels
-       ========================================================= */
-    .zone-label {
-      background: transparent;
-      border: none;
-      box-shadow: none;
-      color: #111;
-      text-align: center;
-      pointer-events: none;
-    }
-
-    .zone-label .zn,
-    .zone-label .br {
+    /* Zone labels */
+    .zone-label { background: transparent; border: none; box-shadow: none; color: #111; text-align: center; pointer-events: none; }
+    .zone-label .zn, .zone-label .br {
       display: inline-block;
       background: rgba(255,255,255,0.86);
       border: 1px solid rgba(0,0,0,0.18);
@@ -175,7 +152,6 @@
       text-overflow: ellipsis;
       box-shadow: 0 2px 6px rgba(0,0,0,0.08);
     }
-
     .zone-label .zn { font-weight: 950; }
     .zone-label .br { font-weight: 900; opacity: 0.7; padding: 1px 6px; border-radius: 10px; }
 
@@ -193,29 +169,18 @@
     .zone-label.z14 .br { font-size: 0px; padding: 0; border: 0; }
     .zone-label.z15 .br { font-size: 4px; }
 
-    /* =========================================================
-       Live location arrow marker (more pointy)
-       ========================================================= */
-    .navArrowWrap{
-      width: 30px;
-      height: 30px;
-      position: relative;
-      transform-origin: 50% 50%;
-      will-change: transform, filter, box-shadow;
-    }
+    /* Live location arrow marker */
+    .navArrowWrap{ width: 30px; height: 30px; position: relative; transform-origin: 50% 50%; will-change: transform, filter, box-shadow; }
     .navArrow{
       position: absolute;
       left: 50%;
       top: 50%;
       width: 0;
       height: 0;
-      transform: translate(-50%, -62%);
-
-      /* MORE POINTY */
-      border-left: 7px solid transparent;
-      border-right: 7px solid transparent;
-      border-bottom: 22px solid #111;
-
+      transform: translate(-50%, -55%);
+      border-left: 9px solid transparent;
+      border-right: 9px solid transparent;
+      border-bottom: 18px solid #111;
       filter: drop-shadow(0 2px 2px rgba(0,0,0,0.35));
     }
     .navMoving .navArrow{
@@ -241,10 +206,6 @@
       transform: translate(-50%, -50%);
       animation: pulseRing 1.5s ease-out infinite;
       pointer-events:none;
-    }
-
-    @media (max-width: 420px) {
-      .zone-label .zn, .zone-label .br { max-width: 170px; }
     }
   </style>
 </head>
@@ -276,9 +237,9 @@
   </div>
 
   <div class="sliderWrap">
-    <div class="sliderTopRow">
+    <div class="timeRow">
       <div id="timeLabel" class="timeLabel">Loading…</div>
-      <button id="btnCenter" class="centerBtn on" type="button">Auto-center: ON</button>
+      <button id="btnCenter" class="on" type="button">Auto-center: ON</button>
     </div>
     <input id="slider" type="range" min="0" max="0" value="0" step="1" />
   </div>
