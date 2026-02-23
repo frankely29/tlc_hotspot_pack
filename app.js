@@ -26,7 +26,7 @@ if (legendEl && legendToggleBtn) {
    z15+: + red (everything)
 =========================== */
 const LABEL_ZOOM_MIN = 10;
-const BOROUGH_ZOOM_SHOW = 15;     // borough line only at very zoomed in
+const BOROUGH_ZOOM_SHOW = 15;
 const LABEL_MAX_CHARS_MID = 14;
 
 function shouldShowLabel(bucket, zoom) {
@@ -237,7 +237,7 @@ function updateRecommendation(frame) {
     return;
   }
 
-  const DIST_PENALTY_PER_MILE = 2.0; // keeps it realistic (don’t suggest far away)
+  const DIST_PENALTY_PER_MILE = 2.0;
 
   let best = null;
 
@@ -283,7 +283,6 @@ function updateRecommendation(frame) {
 =========================== */
 const slider = document.getElementById("slider");
 const timeLabel = document.getElementById("timeLabel");
-const autoCenterBtn = document.getElementById("btnCenter"); // OPTIONAL if you added it, otherwise null
 
 const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 11);
 
@@ -298,10 +297,16 @@ let minutesOfWeek = [];
 let currentFrame = null;
 
 /* ===========================
-   Auto-center (DEFAULT ON)
-   - If your index.html does NOT have btnCenter, it will still work (autoCenter stays ON)
+   Auto-center button (INSIDE bottom box)
+   - Default ON every refresh
+   - Click works reliably (stopPropagation)
 =========================== */
-let autoCenter = true;
+const autoCenterBtn =
+  document.getElementById("btnCenter") ||
+  document.getElementById("autoCenterBtn") ||
+  document.getElementById("btnAutoCenter");
+
+let autoCenter = true; // DEFAULT ON
 
 function syncAutoCenterBtn() {
   if (!autoCenterBtn) return;
@@ -310,16 +315,27 @@ function syncAutoCenterBtn() {
 }
 
 if (autoCenterBtn) {
-  autoCenterBtn.addEventListener("click", () => {
+  // Prevent Leaflet from stealing the tap/drag
+  L.DomEvent.disableClickPropagation(autoCenterBtn);
+  L.DomEvent.disableScrollPropagation(autoCenterBtn);
+
+  autoCenterBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
     autoCenter = !autoCenter;
     syncAutoCenterBtn();
+
     if (autoCenter && userLatLng) map.panTo(userLatLng, { animate: true });
   });
-  // IMPORTANT: initialize label correctly on every refresh
+
+  // Force correct state on page load
   syncAutoCenterBtn();
+} else {
+  console.warn("Auto-center button not found. Check index.html button id (btnCenter).");
 }
 
-// When user drags/zooms the map, stop auto-center so exploring works
+// If user drags/zooms the map, stop auto-center (so you can explore)
 function disableAutoCenterOnUserPan() {
   if (!autoCenter) return;
   autoCenter = false;
@@ -434,7 +450,7 @@ slider.addEventListener("input", () => {
 });
 
 /* ===========================
-   Live location arrow + auto-center behavior
+   Live location arrow + auto-center
 =========================== */
 let navMarker = null;
 let gpsFirstFixDone = false;
@@ -497,7 +513,7 @@ function startLocationWatch() {
     (pos) => {
       const lat = pos.coords.latitude;
       const lng = pos.coords.longitude;
-      const heading = pos.coords.heading; // may be null
+      const heading = pos.coords.heading;
       const ts = pos.timestamp || Date.now();
 
       userLatLng = { lat, lng };
@@ -526,7 +542,7 @@ function startLocationWatch() {
       setNavRotation(lastHeadingDeg);
       setNavVisual(isMoving);
 
-      // First fix: zoom to you a bit
+      // one-time zoom to you on first fix
       if (!gpsFirstFixDone) {
         gpsFirstFixDone = true;
         const targetZoom = Math.max(map.getZoom(), 14);
