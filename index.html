@@ -22,7 +22,7 @@
     html, body { height: 100%; margin: 0; }
     #map { height: 100vh; width: 100vw; }
 
-    /* Legend box (top-left) + minimize */
+    /* Legend box (top-left) + minimize button */
     .legend {
       position: absolute;
       top: 10px;
@@ -86,7 +86,7 @@
       font-weight: 700;
     }
 
-    /* Bottom slider bar (compact) */
+    /* Bottom slider bar */
     .sliderWrap {
       position: absolute;
       left: 10px;
@@ -99,6 +99,8 @@
       padding: 8px 10px 10px 10px;
       font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
     }
+
+    /* Time row + button (same row, doesn't increase box height much) */
     .timeRow{
       display:flex;
       align-items:center;
@@ -112,14 +114,9 @@
       margin: 0;
       line-height: 1.1;
     }
-    input[type="range"] {
-      width: 100%;
-      height: 22px;
-      margin: 0;
-    }
 
-    /* Auto-center button INSIDE slider box, small */
-    .autoCenterBtnInline{
+    /* Small button INSIDE slider box */
+    #btnCenter{
       border: none;
       border-radius: 999px;
       padding: 7px 10px;
@@ -132,8 +129,14 @@
       white-space: nowrap;
       flex: 0 0 auto;
     }
-    .autoCenterBtnInline:active { transform: scale(0.98); }
-    .autoCenterBtnInline.on { outline: 2px solid rgba(0,160,255,0.35); }
+    #btnCenter:active { transform: scale(0.98); }
+    #btnCenter.on { outline: 2px solid rgba(0,160,255,0.35); }
+
+    input[type="range"] {
+      width: 100%;
+      height: 22px;
+      margin: 0;
+    }
 
     /* Zone labels */
     .zone-label {
@@ -175,22 +178,13 @@
     .zone-label.z14 .br { font-size: 0px; padding: 0; border: 0; }
     .zone-label.z15 .br { font-size: 4px; }
 
-    @media (max-width: 420px) {
-      .legend { max-width: 220px; }
-      .legend .row { font-size: 12px; }
-      .legend .sub { font-size: 10px; }
-      .timeLabel { font-size: 16px; }
-      .autoCenterBtnInline{ font-size: 11px; padding: 7px 9px; }
-      .zone-label .zn, .zone-label .br { max-width: 170px; }
-    }
-
-    /* Live location arrow marker */
+    /* Live location arrow */
     .navArrowWrap{
       width: 30px;
       height: 30px;
       position: relative;
       transform-origin: 50% 50%;
-      will-change: transform, filter;
+      will-change: transform, filter, box-shadow;
     }
     .navArrow{
       position: absolute;
@@ -228,6 +222,15 @@
       animation: pulseRing 1.5s ease-out infinite;
       pointer-events:none;
     }
+
+    @media (max-width: 420px) {
+      .legend { max-width: 220px; }
+      .legend .row { font-size: 12px; }
+      .legend .sub { font-size: 10px; }
+      .timeLabel { font-size: 16px; }
+      #btnCenter{ font-size: 11px; padding: 7px 9px; }
+      .zone-label .zn, .zone-label .br { max-width: 170px; }
+    }
   </style>
 </head>
 
@@ -260,8 +263,10 @@
   <div class="sliderWrap">
     <div class="timeRow">
       <div id="timeLabel" class="timeLabel">Loading…</div>
-      <button id="btnCenter" class="autoCenterBtnInline on" type="button">Auto-center: ON</button>
+      <!-- REQUIRED by your app.js -->
+      <button id="btnCenter" class="on" type="button">Auto-center: ON</button>
     </div>
+
     <input id="slider" type="range" min="0" max="0" value="0" step="1" />
   </div>
 
