@@ -5,7 +5,7 @@ const BIN_MINUTES = 20;
 const REFRESH_MS = 5 * 60 * 1000;
 
 // More zoomed out so you can see more boroughs at once
-const AUTO_CENTER_ZOOM = 12;
+const AUTO_CENTER_ZOOM = 14;
 
 // ---------- Legend minimize ----------
 const legendEl = document.getElementById("legend");
@@ -314,7 +314,7 @@ const slider = document.getElementById("slider");
 const timeLabel = document.getElementById("timeLabel");
 
 // INITIAL MAP VIEW: more zoomed out to see more boroughs
-const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 12);
+const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 14);
 
 L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
   attribution: "&copy; OpenStreetMap &copy; CARTO",
