@@ -164,9 +164,36 @@ function escapeHtml(s) {
     .replaceAll("'", "&#039;");
 }
 
-// ---------- Recommendation helpers ----------
+// ---------- Recommendation + Navigation ----------
 const recommendEl = document.getElementById("recommendLine");
+const navBtn = document.getElementById("navBtn");
+
 let userLatLng = null;
+let recommendedDest = null; // {lat,lng,name,borough,rating,distMi}
+
+function setNavDisabled(disabled) {
+  if (!navBtn) return;
+  navBtn.classList.toggle("disabled", !!disabled);
+}
+
+function setNavDestination(dest) {
+  recommendedDest = dest || null;
+  if (!navBtn) return;
+
+  if (!recommendedDest) {
+    navBtn.href = "#";
+    setNavDisabled(true);
+    return;
+  }
+
+  // Universal (Tesla + iPhone): Google Maps directions
+  const { lat, lng } = recommendedDest;
+  navBtn.href = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+    `${lat},${lng}`
+  )}&travelmode=driving`;
+
+  setNavDisabled(false);
+}
 
 function haversineMiles(a, b) {
   const R = 3958.7613;
@@ -202,8 +229,7 @@ function geometryCenter(geom) {
 
   if (!pts.length) return null;
 
-  let sumLng = 0,
-    sumLat = 0;
+  let sumLng = 0, sumLat = 0;
   for (const [lng, lat] of pts) {
     sumLng += lng;
     sumLat += lat;
@@ -211,25 +237,44 @@ function geometryCenter(geom) {
   return { lat: sumLat / pts.length, lng: sumLng / pts.length };
 }
 
+/**
+ * NEW RULE:
+ * Recommendation must be at least BLUE or higher:
+ *   blue/purple/green only
+ * If multiple options, choose “whatever is closer” but still good:
+ *   score = rating - distance_penalty
+ * Increase penalty so closeness matters more.
+ */
 function updateRecommendation(frame) {
   if (!recommendEl) return;
 
   if (!userLatLng) {
     recommendEl.textContent = "Recommended: enable location to get suggestions";
-    return;
-  }
-  const feats = frame?.polygons?.features || [];
-  if (!feats.length) {
-    recommendEl.textContent = "Recommended: …";
+    setNavDestination(null);
     return;
   }
 
-  const DIST_PENALTY_PER_MILE = 2.0;
+  const feats = frame?.polygons?.features || [];
+  if (!feats.length) {
+    recommendEl.textContent = "Recommended: …";
+    setNavDestination(null);
+    return;
+  }
+
+  // Only accept BLUE or higher
+  const allowed = new Set(["blue", "purple", "green"]);
+
+  // Make “closer wins” more strongly once the zone is decent
+  const DIST_PENALTY_PER_MILE = 4.0;
+
   let best = null;
 
   for (const f of feats) {
     const props = f.properties || {};
     const geom = f.geometry;
+
+    const bucket = (props.bucket || "").trim();
+    if (!allowed.has(bucket)) continue;
 
     const rating = Number(props.rating ?? NaN);
     if (!Number.isFinite(rating)) continue;
@@ -238,16 +283,16 @@ function updateRecommendation(frame) {
     if (!center) continue;
 
     const dMi = haversineMiles(userLatLng, center);
-    const bucket = (props.bucket || "").trim();
-    const hardAvoid = bucket === "red";
 
-    const score = rating - dMi * DIST_PENALTY_PER_MILE - (hardAvoid ? 12 : 0);
+    const score = rating - dMi * DIST_PENALTY_PER_MILE;
 
     if (!best || score > best.score) {
       best = {
         score,
         dMi,
         rating,
+        lat: center.lat,
+        lng: center.lng,
         name: (props.zone_name || "").trim() || `Zone ${props.LocationID ?? ""}`,
         borough: (props.borough || "").trim(),
       };
@@ -255,21 +300,30 @@ function updateRecommendation(frame) {
   }
 
   if (!best) {
-    recommendEl.textContent = "Recommended: not enough data for your area";
+    recommendEl.textContent = "Recommended: no Blue+ zone nearby right now";
+    setNavDestination(null);
     return;
   }
 
   const distTxt = best.dMi >= 10 ? `${best.dMi.toFixed(0)} mi` : `${best.dMi.toFixed(1)} mi`;
   const bTxt = best.borough ? ` (${best.borough})` : "";
   recommendEl.textContent = `Recommended: ${best.name}${bTxt} — Rating ${best.rating} — ${distTxt}`;
+
+  setNavDestination({
+    lat: best.lat,
+    lng: best.lng,
+    name: best.name,
+    borough: best.borough,
+    rating: best.rating,
+    distMi: best.dMi,
+  });
 }
 
 // ---------- Leaflet map ----------
-// CHANGE: initial zoom 10 -> 11 (closer view)
 const slider = document.getElementById("slider");
 const timeLabel = document.getElementById("timeLabel");
 
-const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 10);
+const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 11);
 
 L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
   attribution: "&copy; OpenStreetMap &copy; CARTO",
@@ -382,12 +436,11 @@ slider.addEventListener("input", () => {
 });
 
 /* =========================================================
-   Auto-center button (FIXED: don't auto-disable on GPS setView/panTo)
+   Auto-center button (inside bottom bar) - stable logic
    ========================================================= */
 const btnCenter = document.getElementById("btnCenter");
 let autoCenter = true;
 
-// When we move the map programmatically, ignore zoomstart/dragstart for a moment
 let suppressAutoDisableUntil = 0;
 function suppressAutoDisableFor(ms, fn) {
   suppressAutoDisableUntil = Date.now() + ms;
@@ -418,11 +471,8 @@ if (btnCenter) {
   });
 }
 
-// If user explores the map, turn auto-center OFF
 function disableAutoCenterBecauseUserIsExploring() {
-  // Ignore the events caused by OUR OWN map moves (GPS setView/panTo)
   if (Date.now() < suppressAutoDisableUntil) return;
-
   if (!autoCenter) return;
   autoCenter = false;
   syncCenterButton();
@@ -470,9 +520,7 @@ function computeBearingDeg(from, to) {
   const dLng = toRad(to.lng - from.lng);
 
   const y = Math.sin(dLng) * Math.cos(lat2);
-  const x =
-    Math.cos(lat1) * Math.sin(lat2) -
-    Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
 
   let brng = toDeg(Math.atan2(y, x));
   brng = (brng + 360) % 360;
@@ -513,10 +561,7 @@ function startLocationWatch() {
         if (typeof heading === "number" && Number.isFinite(heading)) {
           lastHeadingDeg = heading;
         } else if (dMi > 0.01) {
-          lastHeadingDeg = computeBearingDeg(
-            { lat: lastPos.lat, lng: lastPos.lng },
-            userLatLng
-          );
+          lastHeadingDeg = computeBearingDeg({ lat: lastPos.lat, lng: lastPos.lng }, userLatLng);
         }
 
         if (isMoving) lastMoveTs = ts;
@@ -527,10 +572,9 @@ function startLocationWatch() {
       setNavRotation(lastHeadingDeg);
       setNavVisual(isMoving);
 
-      // one-time zoom to you on first fix (DON'T disable auto-center)
       if (!gpsFirstFixDone) {
         gpsFirstFixDone = true;
-        const targetZoom = Math.max(map.getZoom(), 13);
+        const targetZoom = Math.max(map.getZoom(), 14);
         suppressAutoDisableFor(1200, () => map.setView(userLatLng, targetZoom, { animate: true }));
       } else {
         if (autoCenter) {
@@ -543,6 +587,7 @@ function startLocationWatch() {
     (err) => {
       console.warn("Geolocation error:", err);
       if (recommendEl) recommendEl.textContent = "Recommended: location blocked (enable it)";
+      setNavDestination(null);
     },
     {
       enableHighAccuracy: true,
@@ -570,9 +615,9 @@ async function refreshCurrentFrame() {
 setInterval(refreshCurrentFrame, REFRESH_MS);
 
 // Boot
+setNavDestination(null);
 loadTimeline().catch((err) => {
   console.error(err);
   timeLabel.textContent = `Error loading timeline: ${err.message}`;
 });
-
 startLocationWatch();
