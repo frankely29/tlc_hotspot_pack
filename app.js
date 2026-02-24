@@ -4,6 +4,9 @@ const BIN_MINUTES = 20;
 // Refresh current frame every 5 minutes
 const REFRESH_MS = 5 * 60 * 1000;
 
+// Auto-center zoom (MORE ZOOMED OUT = smaller number)
+const AUTO_CENTER_ZOOM = 12;
+
 // ---------- Legend minimize ----------
 const legendEl = document.getElementById("legend");
 const legendToggleBtn = document.getElementById("legendToggle");
@@ -164,36 +167,12 @@ function escapeHtml(s) {
     .replaceAll("'", "&#039;");
 }
 
-// ---------- Recommendation + Navigation ----------
+// ---------- Recommendation helpers ----------
 const recommendEl = document.getElementById("recommendLine");
 const navBtn = document.getElementById("navBtn");
 
 let userLatLng = null;
-let recommendedDest = null; // {lat,lng,name,borough,rating,distMi}
-
-function setNavDisabled(disabled) {
-  if (!navBtn) return;
-  navBtn.classList.toggle("disabled", !!disabled);
-}
-
-function setNavDestination(dest) {
-  recommendedDest = dest || null;
-  if (!navBtn) return;
-
-  if (!recommendedDest) {
-    navBtn.href = "#";
-    setNavDisabled(true);
-    return;
-  }
-
-  // Universal (Tesla + iPhone): Google Maps directions
-  const { lat, lng } = recommendedDest;
-  navBtn.href = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
-    `${lat},${lng}`
-  )}&travelmode=driving`;
-
-  setNavDisabled(false);
-}
+let bestRecommendedTarget = null;
 
 function haversineMiles(a, b) {
   const R = 3958.7613;
@@ -237,35 +216,32 @@ function geometryCenter(geom) {
   return { lat: sumLat / pts.length, lng: sumLng / pts.length };
 }
 
-/**
- * NEW RULE:
- * Recommendation must be at least BLUE or higher:
- *   blue/purple/green only
- * If multiple options, choose “whatever is closer” but still good:
- *   score = rating - distance_penalty
- * Increase penalty so closeness matters more.
- */
+// Minimum bucket = blue or better
+function bucketRank(bucket) {
+  const b = (bucket || "").trim();
+  const order = { green: 5, purple: 4, blue: 3, sky: 2, yellow: 1, red: 0 };
+  return order[b] ?? -1;
+}
+
 function updateRecommendation(frame) {
+  bestRecommendedTarget = null;
+  if (navBtn) navBtn.style.display = "none";
+
   if (!recommendEl) return;
 
   if (!userLatLng) {
     recommendEl.textContent = "Recommended: enable location to get suggestions";
-    setNavDestination(null);
     return;
   }
-
   const feats = frame?.polygons?.features || [];
   if (!feats.length) {
     recommendEl.textContent = "Recommended: …";
-    setNavDestination(null);
     return;
   }
 
-  // Only accept BLUE or higher
-  const allowed = new Set(["blue", "purple", "green"]);
-
-  // Make “closer wins” more strongly once the zone is decent
-  const DIST_PENALTY_PER_MILE = 4.0;
+  // We only recommend BLUE or higher (blue/purple/green)
+  const MIN_RANK = bucketRank("blue");
+  const DIST_PENALTY_PER_MILE = 2.0;
 
   let best = null;
 
@@ -273,17 +249,18 @@ function updateRecommendation(frame) {
     const props = f.properties || {};
     const geom = f.geometry;
 
-    const bucket = (props.bucket || "").trim();
-    if (!allowed.has(bucket)) continue;
-
     const rating = Number(props.rating ?? NaN);
     if (!Number.isFinite(rating)) continue;
+
+    const bucket = (props.bucket || "").trim();
+    if (bucketRank(bucket) < MIN_RANK) continue;
 
     const center = geometryCenter(geom);
     if (!center) continue;
 
     const dMi = haversineMiles(userLatLng, center);
 
+    // Score balances pay-rating vs distance (so "whatever is closer" still matters)
     const score = rating - dMi * DIST_PENALTY_PER_MILE;
 
     if (!best || score > best.score) {
@@ -291,31 +268,38 @@ function updateRecommendation(frame) {
         score,
         dMi,
         rating,
-        lat: center.lat,
-        lng: center.lng,
         name: (props.zone_name || "").trim() || `Zone ${props.LocationID ?? ""}`,
         borough: (props.borough || "").trim(),
+        center,
       };
     }
   }
 
   if (!best) {
-    recommendEl.textContent = "Recommended: no Blue+ zone nearby right now";
-    setNavDestination(null);
+    recommendEl.textContent = "Recommended: no Blue+ zones nearby";
     return;
   }
 
   const distTxt = best.dMi >= 10 ? `${best.dMi.toFixed(0)} mi` : `${best.dMi.toFixed(1)} mi`;
   const bTxt = best.borough ? ` (${best.borough})` : "";
+
   recommendEl.textContent = `Recommended: ${best.name}${bTxt} — Rating ${best.rating} — ${distTxt}`;
 
-  setNavDestination({
-    lat: best.lat,
-    lng: best.lng,
-    name: best.name,
-    borough: best.borough,
-    rating: best.rating,
-    distMi: best.dMi,
+  bestRecommendedTarget = best.center;
+  if (navBtn) navBtn.style.display = "inline-block";
+}
+
+if (navBtn) {
+  navBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    if (!userLatLng || !bestRecommendedTarget) return;
+
+    const origin = `${userLatLng.lat},${userLatLng.lng}`;
+    const dest = `${bestRecommendedTarget.lat},${bestRecommendedTarget.lng}`;
+
+    // Opens whichever nav system the device supports (Apple Maps / Google Maps / etc.)
+    const url = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(dest)}&travelmode=driving`;
+    window.open(url, "_blank", "noopener,noreferrer");
   });
 }
 
@@ -323,7 +307,8 @@ function updateRecommendation(frame) {
 const slider = document.getElementById("slider");
 const timeLabel = document.getElementById("timeLabel");
 
-const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 11);
+// Start a bit more zoomed out (wider view)
+const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 10);
 
 L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
   attribution: "&copy; OpenStreetMap &copy; CARTO",
@@ -436,11 +421,12 @@ slider.addEventListener("input", () => {
 });
 
 /* =========================================================
-   Auto-center button (inside bottom bar) - stable logic
+   Auto-center button (FIXED: don't auto-disable on GPS setView/panTo)
    ========================================================= */
 const btnCenter = document.getElementById("btnCenter");
 let autoCenter = true;
 
+// When we move the map programmatically, ignore zoomstart/dragstart for a moment
 let suppressAutoDisableUntil = 0;
 function suppressAutoDisableFor(ms, fn) {
   suppressAutoDisableUntil = Date.now() + ms;
@@ -466,11 +452,13 @@ if (btnCenter) {
     syncCenterButton();
 
     if (autoCenter && userLatLng) {
-      suppressAutoDisableFor(800, () => map.panTo(userLatLng, { animate: true }));
+      // Recenter AND apply the more zoomed-out auto-center zoom
+      suppressAutoDisableFor(900, () => map.setView(userLatLng, AUTO_CENTER_ZOOM, { animate: true }));
     }
   });
 }
 
+// If user explores the map, turn auto-center OFF
 function disableAutoCenterBecauseUserIsExploring() {
   if (Date.now() < suppressAutoDisableUntil) return;
   if (!autoCenter) return;
@@ -572,10 +560,10 @@ function startLocationWatch() {
       setNavRotation(lastHeadingDeg);
       setNavVisual(isMoving);
 
+      // one-time zoom to you on first fix (use zoomed-out auto-center zoom)
       if (!gpsFirstFixDone) {
         gpsFirstFixDone = true;
-        const targetZoom = Math.max(map.getZoom(), 10);
-        suppressAutoDisableFor(1200, () => map.setView(userLatLng, targetZoom, { animate: true }));
+        suppressAutoDisableFor(1200, () => map.setView(userLatLng, AUTO_CENTER_ZOOM, { animate: true }));
       } else {
         if (autoCenter) {
           suppressAutoDisableFor(700, () => map.panTo(userLatLng, { animate: true }));
@@ -587,7 +575,6 @@ function startLocationWatch() {
     (err) => {
       console.warn("Geolocation error:", err);
       if (recommendEl) recommendEl.textContent = "Recommended: location blocked (enable it)";
-      setNavDestination(null);
     },
     {
       enableHighAccuracy: true,
@@ -615,9 +602,9 @@ async function refreshCurrentFrame() {
 setInterval(refreshCurrentFrame, REFRESH_MS);
 
 // Boot
-setNavDestination(null);
 loadTimeline().catch((err) => {
   console.error(err);
   timeLabel.textContent = `Error loading timeline: ${err.message}`;
 });
+
 startLocationWatch();
