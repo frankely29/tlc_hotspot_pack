@@ -68,7 +68,7 @@
       line-height: 1.15;
     }
 
-    /* Navigate button under recommendation */
+    /* Navigate button + Staten Island mode */
     .navRow{
       display:flex;
       gap:8px;
@@ -95,7 +95,6 @@
       pointer-events: none;
     }
 
-    /* Staten Island Mode toggle (small pill) */
     .modeBtn{
       border:none;
       border-radius: 999px;
@@ -106,6 +105,8 @@
       cursor: pointer;
       background: rgba(0,0,0,0.06);
       color: #111;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
     }
     .modeBtn:active{ transform: scale(0.98); }
     .modeBtn.on { outline: 2px solid rgba(0,160,255,0.45); }
@@ -286,7 +287,7 @@
 
       <div class="navRow">
         <a id="navBtn" class="navBtn disabled" href="#" target="_blank" rel="noopener">Navigate</a>
-        <button id="btnStaten" class="modeBtn" type="button">Staten Mode: OFF</button>
+        <button id="btnStatenIsland" class="modeBtn" type="button">Staten Island Mode: OFF</button>
       </div>
 
       <div class="row"><span class="swatch" style="background:#00b050"></span> Green = Highest</div>
