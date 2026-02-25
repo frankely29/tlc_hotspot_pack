@@ -4,103 +4,267 @@ const BIN_MINUTES = 20;
 // Refresh current frame every 5 minutes
 const REFRESH_MS = 5 * 60 * 1000;
 
+// Map reference for modules that initialize before Leaflet map
+let mapRef = null;
+
 /* =========================================================
-   Friends / Realtime Presence (simple, reliable)
-   - Username asked once, saved in localStorage
-   - Users are visible by default (no hide toggle)
-   - Server auto-expires users after 30 minutes inactive
-   - Manual Sign out button
+   Friends / Live users (realtime) - PRIVACY SAFE
+   - Visible by default when using the map
+   - Auto sign-out when page is hidden (privacy)
+   - Server also drops users after 30 min inactivity
    ========================================================= */
-const PRESENCE_POLL_MS = 3000;
-const PRESENCE_HEARTBEAT_MS = 15000;
+const FRIENDS_ENABLED = true;
+const FRIENDS_INACTIVE_SEC = 30 * 60; // server cleanup threshold (seconds)
+const FRIENDS_PING_MS = 15 * 1000;
 
-const LS_KEY_CLIENT_ID = "presence_client_id";
-const LS_KEY_USERNAME  = "presence_username";
+const LS_KEY_USERNAME = "friends_username";
+const LS_KEY_CLIENTID = "friends_client_id";
 
-function getOrCreateClientId() {
-  let id = localStorage.getItem(LS_KEY_CLIENT_ID);
-  if (id && id.length > 6) return id;
-  try {
-    id = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + "_" + Math.random().toString(16).slice(2);
-  } catch {
-    id = String(Date.now()) + "_" + Math.random().toString(16).slice(2);
-  }
-  localStorage.setItem(LS_KEY_CLIENT_ID, id);
-  return id;
+let friendsClientId = localStorage.getItem(LS_KEY_CLIENTID) || "";
+if (!friendsClientId) {
+  friendsClientId = (crypto?.randomUUID?.() || String(Date.now()) + "_" + Math.random().toString(16).slice(2));
+  localStorage.setItem(LS_KEY_CLIENTID, friendsClientId);
 }
 
-function askUsernameIfMissing() {
-  let name = (localStorage.getItem(LS_KEY_USERNAME) || "").trim();
-  if (name) return name;
-
-  // Simple popup (works on iPhone/Tesla browser)
-  // Keep it short; we will truncate on server too.
-  // If prompt is blocked, fall back to "Driver".
-  try {
-    name = (window.prompt("Enter a username for the map (shown to friends):", "") || "").trim();
-  } catch {
-    name = "";
+let friendsUsername = (localStorage.getItem(LS_KEY_USERNAME) || "").trim();
+function ensureUsernameOnce() {
+  if (friendsUsername) return friendsUsername;
+  // Simple prompt (works on iPhone/Safari). Only asked once and saved.
+  let name = "";
+  while (!name) {
+    name = (prompt("Enter a username (shown to friends):") || "").trim();
   }
-  if (!name) name = "Driver";
-  name = name.slice(0, 24);
-  localStorage.setItem(LS_KEY_USERNAME, name);
-  return name;
+  friendsUsername = name.slice(0, 24);
+  localStorage.setItem(LS_KEY_USERNAME, friendsUsername);
+  return friendsUsername;
 }
 
-const presenceClientId = getOrCreateClientId();
-let presenceUsername = askUsernameIfMissing();
+function wsUrlFromBase(httpBase) {
+  // http(s)://host -> ws(s)://host/ws
+  const u = new URL(httpBase);
+  u.protocol = (u.protocol === "https:") ? "wss:" : "ws:";
+  u.pathname = "/ws";
+  u.search = "";
+  u.hash = "";
+  return u.toString();
+}
+
+let ws = null;
+let wsConnected = false;
+let wsBackoffMs = 800;
+let wsSignedOut = false;
 
 const btnSignOut = document.getElementById("btnSignOut");
-let presenceSignedOut = false;
 
-async function fetchJSONPost(url, bodyObj) {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    cache: "no-store",
-    mode: "cors",
-    body: JSON.stringify(bodyObj || {}),
+function setSignOutUI() {
+  if (!btnSignOut) return;
+  btnSignOut.textContent = wsSignedOut ? "Signed out" : "Sign out";
+  btnSignOut.classList.toggle("on", !wsSignedOut);
+}
+setSignOutUI();
+
+function wsSend(obj) {
+  if (!ws || ws.readyState !== 1) return;
+  try { ws.send(JSON.stringify(obj)); } catch {}
+}
+
+function connectFriendsWS() {
+  if (!FRIENDS_ENABLED) return;
+  if (wsSignedOut) return;
+
+  const url = wsUrlFromBase(RAILWAY_BASE);
+  try {
+    ws = new WebSocket(url);
+  } catch (e) {
+    console.warn("WS create failed:", e);
+    scheduleReconnect();
+    return;
+  }
+
+  ws.onopen = () => {
+    wsConnected = true;
+    wsBackoffMs = 800;
+
+    const username = ensureUsernameOnce();
+    wsSend({ type: "hello", client_id: friendsClientId, username });
+
+    // If we already have a fix, immediately publish it
+    if (userLatLng) {
+      wsSend({
+        type: "pos",
+        client_id: friendsClientId,
+        lat: userLatLng.lat,
+        lng: userLatLng.lng,
+        heading: lastHeadingDeg || 0,
+        ts: Date.now(),
+      });
+    }
+  };
+
+  ws.onmessage = (ev) => {
+    let msg = null;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    if (!msg || typeof msg !== "object") return;
+
+    if (msg.type === "users" && Array.isArray(msg.users)) {
+      updateFriendsMarkers(msg.users);
+    }
+  };
+
+  ws.onclose = () => {
+    wsConnected = false;
+    ws = null;
+    scheduleReconnect();
+  };
+}
+
+function scheduleReconnect() {
+  if (!FRIENDS_ENABLED) return;
+  if (wsSignedOut) return;
+  const d = Math.min(15000, wsBackoffMs);
+  wsBackoffMs = Math.min(15000, Math.round(wsBackoffMs * 1.6));
+  setTimeout(() => {
+    if (wsSignedOut) return;
+    if (document.visibilityState === "hidden") return;
+    connectFriendsWS();
+  }, d);
+}
+
+function friendsSignOut(sendToServer = true) {
+  wsSignedOut = true;
+  setSignOutUI();
+
+  if (sendToServer) {
+    try { wsSend({ type: "signout", client_id: friendsClientId }); } catch {}
+  }
+
+  try { if (ws) ws.close(); } catch {}
+  ws = null;
+  wsConnected = false;
+
+  clearFriendsMarkers();
+}
+
+function friendsSignIn() {
+  wsSignedOut = false;
+  setSignOutUI();
+  connectFriendsWS();
+}
+
+// Button
+if (btnSignOut) {
+  btnSignOut.addEventListener("pointerdown", (e) => e.stopPropagation());
+  btnSignOut.addEventListener("touchstart", (e) => e.stopPropagation(), { passive: true });
+  btnSignOut.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    friendsSignOut(true);
   });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText} @ ${url} :: ${text.slice(0, 200)}`);
-  try { return JSON.parse(text); } catch { return { ok: true }; }
 }
 
-async function presenceJoin() {
-  try {
-    presenceSignedOut = false;
-    if (btnSignOut) btnSignOut.textContent = "Sign out";
-    return await fetchJSONPost(`${RAILWAY_BASE}/presence/join`, {
-      client_id: presenceClientId,
-      username: presenceUsername,
-    });
-  } catch (e) {
-    console.warn("presenceJoin failed:", e);
+// Privacy: if user leaves the map (background/tab hidden), sign out automatically.
+// When they come back, sign in automatically.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    friendsSignOut(true);
+  } else {
+    if (wsSignedOut) {
+      // stay signed out
+    } else {
+      friendsSignIn();
+    }
   }
+});
+
+window.addEventListener("beforeunload", () => {
+  try { wsSend({ type: "signout", client_id: friendsClientId }); } catch {}
+});
+
+// Keep-alive ping so server knows you're active even if GPS stalls
+setInterval(() => {
+  if (!FRIENDS_ENABLED) return;
+  if (wsSignedOut) return;
+  if (!wsConnected) return;
+  wsSend({ type: "ping", client_id: friendsClientId, ts: Date.now() });
+}, FRIENDS_PING_MS);
+
+// ---------- Friends markers on the map ----------
+let friendsLayer = L.layerGroup();
+let friendsMarkersById = new Map(); // client_id -> marker
+
+function makeFriendIcon() {
+  return L.divIcon({
+    className: "",
+    html: `<div class="friendWrap"><div class="friendArrow"></div></div>`,
+    iconSize: [26, 26],
+    iconAnchor: [13, 13],
+  });
 }
 
-async function presenceUpdate(lat, lng, heading, speed_mps) {
-  if (presenceSignedOut) return;
-  try {
-    return await fetchJSONPost(`${RAILWAY_BASE}/presence/update`, {
-      client_id: presenceClientId,
-      lat, lng,
-      heading: (typeof heading === "number" && Number.isFinite(heading)) ? heading : null,
-      speed_mps: (typeof speed_mps === "number" && Number.isFinite(speed_mps)) ? speed_mps : null,
-    });
-  } catch (e) {
-    console.warn("presenceUpdate failed:", e);
-  }
+function setFriendRotation(marker, deg) {
+  const el = marker?.getElement?.();
+  if (!el) return;
+  const wrap = el.querySelector(".friendWrap");
+  if (!wrap) return;
+  wrap.style.transform = `rotate(${deg}deg)`;
 }
 
-async function presenceSignOut() {
-  presenceSignedOut = true;
-  try {
-    await fetchJSONPost(`${RAILWAY_BASE}/presence/signout`, { client_id: presenceClientId });
-  } catch (e) {
-    console.warn("presenceSignOut failed:", e);
+function clearFriendsMarkers() {
+  try { friendsLayer.clearLayers(); } catch {}
+  friendsMarkersById.clear();
+}
+
+function updateFriendsMarkers(usersArr) {
+  if (!mapRef) return;
+
+  if (!mapRef.hasLayer(friendsLayer)) friendsLayer.addTo(mapRef);
+
+  const now = Date.now() / 1000;
+  const seen = new Set();
+
+  for (const u of usersArr) {
+    if (!u || typeof u !== "object") continue;
+    const cid = String(u.client_id || "");
+    if (!cid) continue;
+    if (cid === friendsClientId) continue;
+
+    const lat = Number(u.lat);
+    const lng = Number(u.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+
+    const upd = Number(u.updated_at_unix);
+    if (Number.isFinite(upd) && (now - upd) > FRIENDS_INACTIVE_SEC) continue;
+
+    seen.add(cid);
+
+    let m = friendsMarkersById.get(cid);
+    if (!m) {
+      m = L.marker([lat, lng], { icon: makeFriendIcon(), interactive: false, zIndexOffset: 8000 });
+      const name = (u.username || "Friend").toString().slice(0, 24);
+      m.bindTooltip(`<span class="friendLabel">${escapeHtml(name)}</span>`, {
+        permanent: true,
+        direction: "top",
+        className: "",
+        opacity: 0.95,
+        interactive: false,
+        offset: [0, -10],
+      });
+      m.addTo(friendsLayer);
+      friendsMarkersById.set(cid, m);
+    } else {
+      m.setLatLng([lat, lng]);
+    }
+
+    const hdg = Number(u.heading);
+    if (Number.isFinite(hdg)) setFriendRotation(m, hdg);
   }
-  if (btnSignOut) btnSignOut.textContent = "Signed out";
+
+  for (const [cid, m] of friendsMarkersById.entries()) {
+    if (!seen.has(cid)) {
+      try { friendsLayer.removeLayer(m); } catch {}
+      friendsMarkersById.delete(cid);
+    }
+  }
 }
 
 // ---------- Legend minimize ----------
@@ -327,7 +491,6 @@ function syncStatenIslandUI() {
 }
 syncStatenIslandUI();
 
-// Harden touch/click so it always toggles (iPhone + Tesla)
 if (btnStatenIsland) {
   btnStatenIsland.addEventListener("pointerdown", (e) => e.stopPropagation());
   btnStatenIsland.addEventListener("touchstart", (e) => e.stopPropagation(), { passive: true });
@@ -338,7 +501,7 @@ if (btnStatenIsland) {
     statenIslandMode = !statenIslandMode;
     localStorage.setItem(LS_KEY_STATEN, statenIslandMode ? "1" : "0");
     syncStatenIslandUI();
-    if (currentFrame) renderFrame(currentFrame); // re-render regardless of your location
+    if (currentFrame) renderFrame(currentFrame);
   });
 }
 
@@ -443,7 +606,6 @@ function geometryCenter(geom) {
   return { lat: sumLat / pts.length, lng: sumLng / pts.length };
 }
 
-// Blue+ rule on effective bucket
 function updateRecommendation(frame) {
   if (!recommendEl) return;
 
@@ -524,6 +686,7 @@ const slider = document.getElementById("slider");
 const timeLabel = document.getElementById("timeLabel");
 
 const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 11);
+mapRef = map; // DO NOT REVERT
 
 L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
   attribution: "&copy; OpenStreetMap &copy; CARTO",
@@ -697,26 +860,24 @@ let lastPos = null;
 let lastHeadingDeg = 0;
 let lastMoveTs = 0;
 
-function makeNavIcon(label, wrapId) {
-  const safeLabel = escapeHtml((label || "Driver").trim());
-  const id = (wrapId || "navWrap");
+function makeNavIcon() {
   return L.divIcon({
     className: "",
-    html: `<div id="${id}" class="navArrowWrap navPulse"><div class="navArrow"></div><div class="navNameTag">${safeLabel}</div></div>`,
-    iconSize: [30, 34],
+    html: `<div id="navWrap" class="navArrowWrap navPulse"><div class="navArrow"></div></div>`,
+    iconSize: [30, 30],
     iconAnchor: [15, 15],
   });
 }
 
-function setNavVisual(isMoving, wrapId = "navWrap") {
-  const el = document.getElementById(wrapId);
+function setNavVisual(isMoving) {
+  const el = document.getElementById("navWrap");
   if (!el) return;
   el.classList.toggle("navMoving", !!isMoving);
   el.classList.toggle("navPulse", !isMoving);
 }
 
-function setNavRotation(deg, wrapId = "navWrap") {
-  const el = document.getElementById(wrapId);
+function setNavRotation(deg) {
+  const el = document.getElementById("navWrap");
   if (!el) return;
   el.style.transform = `rotate(${deg}deg)`;
 }
@@ -744,7 +905,7 @@ function startLocationWatch() {
   }
 
   navMarker = L.marker([40.7128, -74.0060], {
-    icon: makeNavIcon(presenceUsername, "navWrap"),
+    icon: makeNavIcon(),
     interactive: false,
     zIndexOffset: 9999,
   }).addTo(map);
@@ -758,9 +919,6 @@ function startLocationWatch() {
 
       userLatLng = { lat, lng };
       if (navMarker) navMarker.setLatLng(userLatLng);
-
-      // Friends presence update (realtime sharing)
-      presenceUpdate(lat, lng, (typeof heading === "number" ? heading : lastHeadingDeg), pos.coords.speed);
 
       let isMoving = false;
 
@@ -782,8 +940,21 @@ function startLocationWatch() {
 
       lastPos = { lat, lng, ts };
 
-      setNavRotation(lastHeadingDeg, "navWrap");
-      setNavVisual(isMoving, "navWrap");
+      setNavRotation(lastHeadingDeg);
+      setNavVisual(isMoving);
+
+      // Friends: publish my position to backend (others see me)
+      if (FRIENDS_ENABLED && !wsSignedOut && wsConnected) {
+        wsSend({
+          type: "pos",
+          client_id: friendsClientId,
+          username: friendsUsername || undefined,
+          lat,
+          lng,
+          heading: lastHeadingDeg || 0,
+          ts: Date.now(),
+        });
+      }
 
       if (!gpsFirstFixDone) {
         gpsFirstFixDone = true;
@@ -812,7 +983,7 @@ function startLocationWatch() {
   setInterval(() => {
     const now = Date.now();
     const recentlyMoved = lastMoveTs && (now - lastMoveTs) < 5000;
-    setNavVisual(!!recentlyMoved, "navWrap");
+    setNavVisual(!!recentlyMoved);
   }, 1200);
 }
 
@@ -833,125 +1004,7 @@ loadTimeline().catch((err) => {
   console.error(err);
   timeLabel.textContent = `Error loading timeline: ${err.message}`;
 });
-
-presenceJoin();
-startPresenceLoops();
-
-/* =========================================================
-   Friends markers (polling)
-   ========================================================= */
-const otherUserMarkers = new Map();
-
-function makeOtherIcon(username, headingDeg, wrapId) {
-  const safe = escapeHtml((username || "Driver").trim());
-  const id = wrapId;
-  return L.divIcon({
-    className: "",
-    html: `<div id="${id}" class="navArrowWrap"><div class="navArrow"></div><div class="navNameTag">${safe}</div></div>`,
-    iconSize: [30, 34],
-    iconAnchor: [15, 15],
-  });
-}
-
-function setOtherRotation(wrapId, deg) {
-  const el = document.getElementById(wrapId);
-  if (!el) return;
-  el.style.transform = `rotate(${deg}deg)`;
-}
-
-async function pollOtherUsers() {
-  if (presenceSignedOut) return;
-  try {
-    const data = await fetchJSON(`${RAILWAY_BASE}/presence/users?client_id=${encodeURIComponent(presenceClientId)}`);
-    const users = data?.users || [];
-    const seen = new Set();
-
-    for (const u of users) {
-      const cid = u.client_id;
-      if (!cid) continue;
-      seen.add(cid);
-
-      const wrapId = `u_${cid}`;
-      const latlng = [u.lat, u.lng];
-      const heading = (typeof u.heading === "number" && Number.isFinite(u.heading)) ? u.heading : 0;
-
-      if (!otherUserMarkers.has(cid)) {
-        const m = L.marker(latlng, {
-          icon: makeOtherIcon(u.username, heading, wrapId),
-          interactive: false,
-          zIndexOffset: 8000,
-        }).addTo(map);
-        otherUserMarkers.set(cid, m);
-        setTimeout(() => setOtherRotation(wrapId, heading), 50);
-      } else {
-        const m = otherUserMarkers.get(cid);
-        m.setLatLng(latlng);
-        m.setIcon(makeOtherIcon(u.username, heading, wrapId));
-        setTimeout(() => setOtherRotation(wrapId, heading), 0);
-      }
-    }
-
-    for (const [cid, m] of otherUserMarkers.entries()) {
-      if (!seen.has(cid)) {
-        try { map.removeLayer(m); } catch {}
-        otherUserMarkers.delete(cid);
-      }
-    }
-  } catch (e) {
-    console.warn("pollOtherUsers failed:", e);
-  }
-}
-
-let presencePollTimer = null;
-let presenceHeartbeatTimer = null;
-
-function startPresenceLoops() {
-  if (presencePollTimer) clearInterval(presencePollTimer);
-  if (presenceHeartbeatTimer) clearInterval(presenceHeartbeatTimer);
-
-  presencePollTimer = setInterval(pollOtherUsers, PRESENCE_POLL_MS);
-
-  presenceHeartbeatTimer = setInterval(() => {
-    if (!userLatLng || presenceSignedOut) return;
-    presenceUpdate(userLatLng.lat, userLatLng.lng, lastHeadingDeg, null);
-  }, PRESENCE_HEARTBEAT_MS);
-}
-
-// Sign out button
-if (btnSignOut) {
-  btnSignOut.addEventListener("pointerdown", (e) => e.stopPropagation());
-  btnSignOut.addEventListener("touchstart", (e) => e.stopPropagation(), { passive: true });
-  btnSignOut.addEventListener("click", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    presenceSignOut();
-
-    for (const [, m] of otherUserMarkers.entries()) {
-      try { map.removeLayer(m); } catch {}
-    }
-    otherUserMarkers.clear();
-  });
-}
-
-// Auto sign-out after 30 minutes of no interaction
-let lastInteractionTs = Date.now();
-["pointerdown","touchstart","keydown","wheel","mousemove"].forEach((evt) => {
-  window.addEventListener(evt, () => { lastInteractionTs = Date.now(); }, { passive: true });
-});
-setInterval(() => {
-  if (presenceSignedOut) return;
-  const idleMs = Date.now() - lastInteractionTs;
-  if (idleMs > 30 * 60 * 1000) {
-    console.warn("Auto sign-out (inactive 30 minutes)");
-    presenceSignOut();
-  }
-}, 60 * 1000);
-
-// Privacy: if you leave the tab, you stop sending updates;
-// server expires you after 30 mins if you stay away.
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden) return;
-  presenceJoin();
-});
-
 startLocationWatch();
+
+// Boot friends websocket (realtime users)
+if (FRIENDS_ENABLED) { try { connectFriendsWS(); } catch(e) { console.warn(e); } }
