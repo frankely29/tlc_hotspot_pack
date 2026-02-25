@@ -116,22 +116,6 @@
     .modeBtn:active{ transform: scale(0.98); }
     .modeBtn.on { outline: 2px solid rgba(0,160,255,0.45); }
 
-    /* NEW: Sign out button style (same family as mode button) */
-    .signOutBtn{
-      border:none;
-      border-radius: 999px;
-      padding: 6px 9px;
-      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
-      font-weight: 950;
-      font-size: 11px;
-      cursor: pointer;
-      background: rgba(255,0,0,0.10);
-      color: #3a0b0b;
-      -webkit-tap-highlight-color: transparent;
-      touch-action: manipulation;
-    }
-    .signOutBtn:active{ transform: scale(0.98); }
-
     .legend .row {
       display: flex;
       align-items: center;
@@ -242,7 +226,7 @@
     .zone-label.z14 .br { font-size: 0px; padding: 0; border: 0; }
     .zone-label.z15 .br { font-size: 4px; }
 
-    /* Live location arrow marker (YOU + OTHERS share same base arrow) */
+    /* Live location arrow marker */
     .navArrowWrap{
       width: 30px;
       height: 30px;
@@ -286,90 +270,6 @@
       animation: pulseRing 1.5s ease-out infinite;
       pointer-events:none;
     }
-
-    /* NEW: other users label bubble (next to their arrow) */
-    .userLabel {
-      position: absolute;
-      left: 50%;
-      top: 100%;
-      transform: translate(-50%, 6px);
-      white-space: nowrap;
-      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
-      font-weight: 950;
-      font-size: 11px;
-      padding: 2px 8px;
-      border-radius: 999px;
-      background: rgba(255,255,255,0.92);
-      border: 1px solid rgba(0,0,0,0.18);
-      box-shadow: 0 2px 6px rgba(0,0,0,0.12);
-      color: #111;
-      pointer-events: none;
-      max-width: 160px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    /* NEW: Username modal */
-    .modalBackdrop{
-      position: fixed;
-      inset: 0;
-      z-index: 2000;
-      background: rgba(0,0,0,0.35);
-      display: none;
-      align-items: center;
-      justify-content: center;
-      padding: 18px;
-      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
-    }
-    .modalBackdrop.show{ display: flex; }
-    .modalCard{
-      width: min(420px, 100%);
-      background: rgba(255,255,255,0.96);
-      border-radius: 16px;
-      box-shadow: 0 18px 60px rgba(0,0,0,0.25);
-      padding: 14px 14px 12px 14px;
-    }
-    .modalTitle{
-      margin: 0 0 6px 0;
-      font-weight: 950;
-      font-size: 16px;
-    }
-    .modalSub{
-      margin: 0 0 10px 0;
-      font-weight: 700;
-      opacity: 0.78;
-      font-size: 13px;
-      line-height: 1.25;
-    }
-    .modalRow{ display:flex; gap:10px; }
-    .modalInput{
-      flex: 1;
-      border: 1px solid rgba(0,0,0,0.18);
-      border-radius: 12px;
-      padding: 10px 12px;
-      font-size: 14px;
-      font-weight: 800;
-      outline: none;
-      background: #fff;
-    }
-    .modalBtn{
-      border: none;
-      border-radius: 12px;
-      padding: 10px 12px;
-      font-size: 14px;
-      font-weight: 950;
-      cursor: pointer;
-      background: rgba(0,160,255,0.15);
-      color: #0b2a3a;
-    }
-    .modalBtn:active{ transform: scale(0.98); }
-    .modalHint{
-      margin: 10px 0 0 0;
-      font-size: 12px;
-      font-weight: 700;
-      opacity: 0.75;
-      line-height: 1.25;
-    }
   </style>
 </head>
 
@@ -388,7 +288,6 @@
       <div class="navRow">
         <a id="navBtn" class="navBtn disabled" href="#" target="_blank" rel="noopener">Navigate</a>
         <button id="btnStatenIsland" class="modeBtn" type="button">Staten Island Mode: OFF</button>
-        <button id="btnSignOut" class="signOutBtn" type="button">Sign out</button>
       </div>
 
       <div class="row"><span class="swatch" style="background:#00b050"></span> Green = Highest</div>
@@ -410,19 +309,6 @@
     <input id="slider" type="range" min="0" max="0" value="0" step="1" />
     <div class="centerBtnInBar">
       <button id="btnCenter" class="toggleBtnSmall on" type="button">Auto-center: ON</button>
-    </div>
-  </div>
-
-  <!-- NEW: Username modal -->
-  <div id="nameModal" class="modalBackdrop" aria-hidden="true">
-    <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
-      <div id="modalTitle" class="modalTitle">Enter a username</div>
-      <p class="modalSub">This name shows next to your arrow so friends can recognize you. Saved on this device.</p>
-      <div class="modalRow">
-        <input id="nameInput" class="modalInput" type="text" maxlength="24" placeholder="e.g. Frank" />
-        <button id="nameSave" class="modalBtn" type="button">Continue</button>
-      </div>
-      <p class="modalHint">Privacy: if you’re inactive for 30 minutes (or tab is background), you’ll auto sign out.</p>
     </div>
   </div>
 
