@@ -22,44 +22,38 @@
     html, body { height: 100%; margin: 0; }
     #map { height: 100vh; width: 100vw; }
 
-    /* =========================================================
-       DO NOT REVERT:
-       Make legend ~2x smaller for visibility.
-       ========================================================= */
+    /* Legend box (top-left) + minimize button */
     .legend {
       position: absolute;
-      top: 8px;
-      left: 8px;
+      top: 10px;
+      left: 10px;
       z-index: 1000;
       background: rgba(255,255,255,0.92);
-      padding: 6px 6px 6px 6px;          /* smaller */
-      border-radius: 10px;               /* smaller */
-      box-shadow: 0 5px 14px rgba(0,0,0,0.14);
+      padding: 8px 8px 7px 8px;
+      border-radius: 12px;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.15);
       font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
-      max-width: 170px;                  /* smaller */
-      transform: scale(0.86);            /* ~2x smaller feel */
-      transform-origin: top left;
+      max-width: 240px;
     }
-
     .legendHeader{
       display:flex;
       align-items:center;
       justify-content:space-between;
-      gap:8px;
-      margin-bottom:4px;
+      gap:10px;
+      margin-bottom:6px;
     }
     .legend h3 {
       margin: 0;
-      font-size: 12px;                   /* smaller */
+      font-size: 14px;
       font-weight: 900;
     }
     .legendToggleBtn{
       border: none;
       background: rgba(0,0,0,0.06);
       border-radius: 10px;
-      padding: 4px 8px;                  /* smaller */
+      padding: 6px 10px;
       font-weight: 950;
-      font-size: 12px;                   /* smaller */
+      font-size: 13px;
       cursor: pointer;
     }
     .legendToggleBtn:active{ transform: scale(0.98); }
@@ -68,12 +62,13 @@
 
     .legend .recommendLine{
       margin: 0 0 6px 0;
-      font-size: 10px;                   /* smaller */
+      font-size: 11px;
       font-weight: 900;
       opacity: 0.92;
       line-height: 1.15;
     }
 
+    /* Navigate button + Staten Island mode */
     .navRow{
       display:flex;
       gap:8px;
@@ -86,10 +81,10 @@
       text-decoration:none;
       border:none;
       border-radius: 999px;
-      padding: 6px 9px;                  /* smaller */
+      padding: 7px 10px;
       font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
       font-weight: 950;
-      font-size: 11px;                   /* smaller */
+      font-size: 12px;
       cursor: pointer;
       background: rgba(0,160,255,0.12);
       color: #0b2a3a;
@@ -103,10 +98,10 @@
     .modeBtn{
       border:none;
       border-radius: 999px;
-      padding: 6px 9px;                  /* smaller */
+      padding: 7px 10px;
       font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
       font-weight: 950;
-      font-size: 11px;                   /* smaller */
+      font-size: 12px;
       cursor: pointer;
       background: rgba(0,0,0,0.06);
       color: #111;
@@ -119,74 +114,51 @@
     .legend .row {
       display: flex;
       align-items: center;
-      gap: 7px;
-      margin: 4px 0;
-      font-size: 11px;                   /* smaller */
+      gap: 8px;
+      margin: 5px 0;
+      font-size: 13px;
       font-weight: 800;
     }
     .legend .swatch {
-      width: 12px;                       /* smaller */
-      height: 12px;                      /* smaller */
+      width: 14px;
+      height: 14px;
       border-radius: 4px;
       border: 1px solid rgba(0,0,0,0.15);
-      flex: 0 0 12px;
+      flex: 0 0 14px;
     }
     .legend .sub {
-      margin-top: 6px;
-      font-size: 10px;                   /* smaller */
+      margin-top: 7px;
+      font-size: 11px;
       opacity: 0.85;
-      line-height: 1.2;
+      line-height: 1.25;
       font-weight: 700;
     }
 
-    /* =========================================================
-       DO NOT REVERT:
-       Bottom slider box moved DOWN + ~2x thinner.
-       ========================================================= */
+    /* Bottom slider bar (small) */
     .sliderWrap {
       position: absolute;
       left: 10px;
       right: 10px;
-      bottom: 2px;                       /* lower */
+      bottom: 10px;
       z-index: 1000;
       background: rgba(255,255,255,0.92);
       border-radius: 14px;
       box-shadow: 0 6px 18px rgba(0,0,0,0.15);
-      padding: 6px 10px 6px 10px;        /* thinner */
+      padding: 8px 10px 10px 10px;
       font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
     }
     .timeLabel {
-      font-size: 16px;                   /* smaller */
+      font-size: 18px;
       font-weight: 950;
-      margin: 0 0 4px 0;
+      margin: 0 0 6px 0;
     }
     input[type="range"] {
       width: 100%;
-      height: 18px;                      /* thinner */
+      height: 22px;
       margin: 0;
     }
 
-    /* Small button in bottom box */
-    .centerBtnInBar{
-      margin-top: 6px;                   /* tighter */
-      display:flex;
-      justify-content:flex-end;
-    }
-    .toggleBtnSmall{
-      border:none;
-      border-radius: 999px;
-      padding: 6px 9px;                  /* smaller */
-      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
-      font-weight: 950;
-      font-size: 11px;                   /* smaller */
-      cursor: pointer;
-      background: rgba(255,255,255,0.95);
-      box-shadow: 0 6px 18px rgba(0,0,0,0.18);
-    }
-    .toggleBtnSmall.on { outline: 2px solid rgba(0,160,255,0.45); }
-    .toggleBtnSmall:active { transform: scale(0.98); }
-
-    /* ZONE LABELS (tooltips) - unchanged */
+    /* ZONE LABELS (tooltips) */
     .zone-label {
       background: transparent;
       border: none;
@@ -225,6 +197,14 @@
     .zone-label.z13 .br,
     .zone-label.z14 .br { font-size: 0px; padding: 0; border: 0; }
     .zone-label.z15 .br { font-size: 4px; }
+
+    @media (max-width: 420px) {
+      .legend { max-width: 220px; }
+      .legend .row { font-size: 12px; }
+      .legend .sub { font-size: 10px; }
+      .timeLabel { font-size: 16px; }
+      .zone-label .zn, .zone-label .br { max-width: 170px; }
+    }
 
     /* Live location arrow marker */
     .navArrowWrap{
@@ -270,6 +250,26 @@
       animation: pulseRing 1.5s ease-out infinite;
       pointer-events:none;
     }
+
+    /* Small button in bottom box */
+    .centerBtnInBar{
+      margin-top: 8px;
+      display:flex;
+      justify-content:flex-end;
+    }
+    .toggleBtnSmall{
+      border:none;
+      border-radius: 999px;
+      padding: 7px 10px;
+      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
+      font-weight: 950;
+      font-size: 12px;
+      cursor: pointer;
+      background: rgba(255,255,255,0.95);
+      box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+    }
+    .toggleBtnSmall.on { outline: 2px solid rgba(0,160,255,0.45); }
+    .toggleBtnSmall:active { transform: scale(0.98); }
   </style>
 </head>
 
@@ -307,6 +307,7 @@
   <div class="sliderWrap">
     <div id="timeLabel" class="timeLabel">Loading…</div>
     <input id="slider" type="range" min="0" max="0" value="0" step="1" />
+
     <div class="centerBtnInBar">
       <button id="btnCenter" class="toggleBtnSmall on" type="button">Auto-center: ON</button>
     </div>
