@@ -683,7 +683,7 @@ function startLocationWatch() {
 
       if (!gpsFirstFixDone) {
         gpsFirstFixDone = true;
-        const targetZoom = Math.max(map.getZoom(), 14);
+        const targetZoom = Math.max(map.getZoom(), 11);
         suppressAutoDisableFor(1200, () => map.setView(userLatLng, targetZoom, { animate: true }));
       } else {
         if (autoCenter) {
