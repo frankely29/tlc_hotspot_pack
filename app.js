@@ -1,12 +1,11 @@
 const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
 const BIN_MINUTES = 20;
 
-// Refresh current frame every 5 minutes
+// Refresh current frame every 5 minutes (no page reload needed)
 const REFRESH_MS = 5 * 60 * 1000;
 
-// FOLLOW behavior (NEW)
-const FOLLOW_ZOOM = 14;        // tighter than before (13). Try 15 if you want closer.
-const FOLLOW_PAN_ONLY = false; // false = keep zoom locked while auto-center ON
+// When auto-center is ON and you're moving, keep at least this zoom
+const AUTO_CENTER_MIN_ZOOM_MOVING = 15;
 
 // ---------- Legend minimize ----------
 const legendEl = document.getElementById("legend");
@@ -227,7 +226,7 @@ function syncStatenIslandUI() {
   if (modeNote) {
     modeNote.innerHTML = statenIslandMode
       ? `Staten Island Mode is <b>ON</b>: Staten Island colors are <b>relative within Staten Island</b> only.<br/>Other boroughs remain NYC-wide.`
-      : `Colors come from rating (1–100) for the selected ${BIN_MINUTES}-minute window.<br/>Time label is NYC time.`;
+      : `Colors come from rating (1–100) for the selected 20-minute window.<br/>Time label is NYC time.`;
   }
 }
 syncStatenIslandUI();
@@ -347,6 +346,7 @@ function geometryCenter(geom) {
   return { lat: sumLat / pts.length, lng: sumLng / pts.length };
 }
 
+// Blue+ rule on effective bucket
 function updateRecommendation(frame) {
   if (!recommendEl) return;
 
@@ -426,12 +426,17 @@ function updateRecommendation(frame) {
 const slider = document.getElementById("slider");
 const timeLabel = document.getElementById("timeLabel");
 
-const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 11);
+const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 10);
 
 L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
   attribution: "&copy; OpenStreetMap &copy; CARTO",
   maxZoom: 19,
 }).addTo(map);
+
+// IMPORTANT: Create a dedicated pane ABOVE tooltips/labels so your arrow is never covered.
+map.createPane("navPane");
+map.getPane("navPane").style.zIndex = 1200;         // higher than tooltipPane (typically ~650)
+map.getPane("navPane").style.pointerEvents = "none";
 
 let geoLayer = null;
 let timeline = [];
@@ -445,7 +450,7 @@ function buildPopupHTML(props) {
   const rating = props.rating ?? "";
   const bucket = props.bucket ?? "";
   const pickups = props.pickups ?? "";
-  const pay = props.avg_driver_pay == null ? "n/a" : props.avg_driver_pay.toFixed(2);
+  const pay = props.avg_driver_pay == null ? "n/a" : Number(props.avg_driver_pay).toFixed(2);
 
   let extra = "";
   if (statenIslandMode && isStatenIslandFeature(props) && Number.isFinite(Number(props.si_local_rating))) {
@@ -510,9 +515,6 @@ function renderFrame(frame) {
   }).addTo(map);
 
   updateRecommendation(currentFrame);
-
-  // NEW: always re-raise nav marker above layers
-  if (navMarker) navMarker.setZIndexOffset(999999);
 }
 
 async function loadFrame(idx) {
@@ -580,10 +582,7 @@ if (btnCenter) {
     syncCenterButton();
 
     if (autoCenter && userLatLng) {
-      suppressAutoDisableFor(800, () => {
-        if (FOLLOW_PAN_ONLY) map.panTo(userLatLng, { animate: true });
-        else map.setView(userLatLng, FOLLOW_ZOOM, { animate: true });
-      });
+      suppressAutoDisableFor(800, () => map.panTo(userLatLng, { animate: true }));
     }
   });
 }
@@ -598,7 +597,7 @@ map.on("dragstart", disableAutoCenterBecauseUserIsExploring);
 map.on("zoomstart", disableAutoCenterBecauseUserIsExploring);
 
 /* =========================
-   Live location arrow + auto-center
+   Live location arrow + follow
    ========================= */
 let gpsFirstFixDone = false;
 let navMarker = null;
@@ -653,7 +652,8 @@ function startLocationWatch() {
   navMarker = L.marker([40.7128, -74.0060], {
     icon: makeNavIcon(),
     interactive: false,
-    zIndexOffset: 999999, // higher (NEW)
+    zIndexOffset: 999999,     // extra safety
+    pane: "navPane",          // ALWAYS above labels
   }).addTo(map);
 
   navigator.geolocation.watchPosition(
@@ -664,17 +664,15 @@ function startLocationWatch() {
       const ts = pos.timestamp || Date.now();
 
       userLatLng = { lat, lng };
-      if (navMarker) {
-        navMarker.setLatLng(userLatLng);
-        navMarker.setZIndexOffset(999999);
-      }
+      if (navMarker) navMarker.setLatLng(userLatLng);
 
       let isMoving = false;
+      let mph = 0;
 
       if (lastPos) {
         const dMi = haversineMiles({ lat: lastPos.lat, lng: lastPos.lng }, userLatLng);
         const dtSec = Math.max(1, (ts - lastPos.ts) / 1000);
-        const mph = (dMi / dtSec) * 3600;
+        mph = (dMi / dtSec) * 3600;
 
         isMoving = mph >= 2.0;
 
@@ -692,15 +690,18 @@ function startLocationWatch() {
       setNavRotation(lastHeadingDeg);
       setNavVisual(isMoving);
 
-      // FOLLOW logic (NEW)
+      // follow behavior
       if (!gpsFirstFixDone) {
         gpsFirstFixDone = true;
-        suppressAutoDisableFor(1200, () => map.setView(userLatLng, FOLLOW_ZOOM, { animate: true }));
+        const targetZoom = Math.max(map.getZoom(), 14);
+        suppressAutoDisableFor(1200, () => map.setView(userLatLng, targetZoom, { animate: true }));
       } else if (autoCenter) {
-        suppressAutoDisableFor(650, () => {
-          if (FOLLOW_PAN_ONLY) map.panTo(userLatLng, { animate: true });
-          else map.setView(userLatLng, FOLLOW_ZOOM, { animate: true });
-        });
+        // If you're moving, keep a slightly closer zoom (but don't force zoom-out).
+        if (isMoving && map.getZoom() < AUTO_CENTER_MIN_ZOOM_MOVING) {
+          suppressAutoDisableFor(700, () => map.setView(userLatLng, AUTO_CENTER_MIN_ZOOM_MOVING, { animate: true }));
+        } else {
+          suppressAutoDisableFor(700, () => map.panTo(userLatLng, { animate: true }));
+        }
       }
 
       if (currentFrame) updateRecommendation(currentFrame);
@@ -721,11 +722,12 @@ function startLocationWatch() {
     const now = Date.now();
     const recentlyMoved = lastMoveTs && (now - lastMoveTs) < 5000;
     setNavVisual(!!recentlyMoved);
-    if (navMarker) navMarker.setZIndexOffset(999999);
   }, 1200);
 }
 
-// ---------- Auto-refresh every 5 minutes ----------
+/* =========================================================
+   Auto-refresh (NO page reload)
+   ========================================================= */
 async function refreshCurrentFrame() {
   try {
     const idx = Number(slider.value || "0");
@@ -735,6 +737,13 @@ async function refreshCurrentFrame() {
   }
 }
 setInterval(refreshCurrentFrame, REFRESH_MS);
+
+// Also refresh when you come back to the tab/app (so it updates without you reloading)
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    refreshCurrentFrame().catch(() => {});
+  }
+});
 
 // Boot
 setNavDestination(null);
