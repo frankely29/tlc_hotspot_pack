@@ -1,15 +1,28 @@
+/* =========================================================
+   CONFIG
+   ========================================================= */
+
+// Railway backend base URL (must host /timeline and /frame/{idx})
 const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
+
+// Timeline window size (must match backend generation bin_minutes)
 const BIN_MINUTES = 20;
 
-// Refresh current frame every 5 minutes
+// Auto-refresh current frame every 5 minutes (reloads same slider index)
 const REFRESH_MS = 5 * 60 * 1000;
 
-// NEW: auto-center closer when following
-const AUTO_CENTER_MIN_ZOOM = 15; // was effectively 13 before
+// Auto-center behavior: if following, do not allow zoom below this
+// NOTE: Larger number = closer zoom-in (15 is fairly close)
+const AUTO_CENTER_MIN_ZOOM = 15;
 
-// ---------- Legend minimize ----------
+/* =========================================================
+   LEGEND MINIMIZE UI
+   - toggles .minimized class on the legend
+   ========================================================= */
+
 const legendEl = document.getElementById("legend");
 const legendToggleBtn = document.getElementById("legendToggle");
+
 if (legendEl && legendToggleBtn) {
   legendToggleBtn.addEventListener("click", () => {
     const minimized = legendEl.classList.toggle("minimized");
@@ -17,15 +30,25 @@ if (legendEl && legendToggleBtn) {
   });
 }
 
-/** LABEL VISIBILITY (mobile-friendly, demand-priority) */
-const LABEL_ZOOM_MIN = 10;
-const BOROUGH_ZOOM_SHOW = 15;
-const LABEL_MAX_CHARS_MID = 14;
+/* =========================================================
+   LABEL VISIBILITY RULES (mobile-friendly)
+   - show more labels as you zoom in
+   - prioritize high-demand buckets at lower zoom
+   ========================================================= */
+
+const LABEL_ZOOM_MIN = 10;         // below this: no labels
+const BOROUGH_ZOOM_SHOW = 15;      // show borough name only at zoom 15
+const LABEL_MAX_CHARS_MID = 14;    // shorten zone name mid-zoom to avoid clutter
 
 function shouldShowLabel(bucket, zoom) {
   if (zoom < LABEL_ZOOM_MIN) return false;
+
   const b = (bucket || "").trim();
+
+  // At max zoom: show all labels (including reds)
   if (zoom >= 15) return true;
+
+  // As you zoom out, hide the lower buckets first
   if (zoom === 14) return b !== "red";
   if (zoom === 13) return b === "green" || b === "purple" || b === "blue" || b === "sky";
   if (zoom === 12) return b === "green" || b === "purple" || b === "blue";
@@ -33,25 +56,38 @@ function shouldShowLabel(bucket, zoom) {
   return b === "green";
 }
 
-// ---------- Time helpers ----------
+/* =========================================================
+   TIME HELPERS
+   - Timeline frame 'time' uses a fixed anchor week
+   - We display it as NYC time label
+   - We pick the closest frame index to "now" in NYC
+   ========================================================= */
+
 function parseIsoNoTz(iso) {
+  // ISO format: YYYY-MM-DDTHH:MM:SS
   const [d, t] = iso.split("T");
   const [Y, M, D] = d.split("-").map(Number);
   const [h, m, s] = t.split(":").map(Number);
   return { Y, M, D, h, m, s };
 }
+
 function dowMon0FromIso(iso) {
+  // Converts ISO date to day-of-week (Mon=0..Sun=6)
   const { Y, M, D, h, m, s } = parseIsoNoTz(iso);
   const dt = new Date(Date.UTC(Y, M - 1, D, h, m, s));
   const dowSun0 = dt.getUTCDay();
   return dowSun0 === 0 ? 6 : dowSun0 - 1;
 }
+
 function minuteOfWeekFromIso(iso) {
+  // Returns minute index in week: 0..10079 (Mon 00:00 = 0)
   const { h, m } = parseIsoNoTz(iso);
   const dow_m = dowMon0FromIso(iso);
   return dow_m * 1440 + (h * 60 + m);
 }
+
 function formatNYCLabel(iso) {
+  // Displays: "Mon 3:40 PM"
   const { h, m } = parseIsoNoTz(iso);
   const dow_m = dowMon0FromIso(iso);
   const names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -60,7 +96,9 @@ function formatNYCLabel(iso) {
   const mm = String(m).padStart(2, "0");
   return `${names[dow_m]} ${hr12}:${mm} ${ampm}`;
 }
+
 function getNowNYCMinuteOfWeekRounded() {
+  // Get current NYC time (timezone-safe) and round DOWN to BIN_MINUTES boundary
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     weekday: "short",
@@ -81,13 +119,18 @@ function getNowNYCMinuteOfWeekRounded() {
   const total = dow_m * 1440 + hour * 60 + minute;
   return Math.floor(total / BIN_MINUTES) * BIN_MINUTES;
 }
+
 function cyclicDiff(a, b, mod) {
+  // Used to compare minutes-of-week around wrap boundary
   const d = Math.abs(a - b);
   return Math.min(d, mod - d);
 }
+
 function pickClosestIndex(minutesOfWeekArr, target) {
+  // Find timeline index closest to NYC "now", with week wrap-around
   let bestIdx = 0;
   let bestDiff = Infinity;
+
   for (let i = 0; i < minutesOfWeekArr.length; i++) {
     const diff = cyclicDiff(minutesOfWeekArr[i], target, 7 * 1440);
     if (diff < bestDiff) {
@@ -98,7 +141,11 @@ function pickClosestIndex(minutesOfWeekArr, target) {
   return bestIdx;
 }
 
-// ---------- Network ----------
+/* =========================================================
+   NETWORK HELPERS
+   - fetch JSON from Railway with no-cache
+   ========================================================= */
+
 async function fetchJSON(url) {
   const res = await fetch(url, { cache: "no-store", mode: "cors" });
   const text = await res.text();
@@ -110,7 +157,10 @@ async function fetchJSON(url) {
   }
 }
 
-// ---------- Bucket label ----------
+/* =========================================================
+   BUCKET LABEL TEXT
+   ========================================================= */
+
 function prettyBucket(b) {
   const m = {
     green: "Highest",
@@ -123,18 +173,25 @@ function prettyBucket(b) {
   return m[b] || (b ?? "");
 }
 
-// ---------- Label helpers ----------
+/* =========================================================
+   LABEL / HTML HELPERS
+   ========================================================= */
+
 function shortenLabel(text, maxChars) {
   const t = (text || "").trim();
   if (!t) return "";
   if (t.length <= maxChars) return t;
   return t.slice(0, maxChars - 1) + "…";
 }
+
 function zoomClass(zoom) {
+  // Creates z10..z15 class name
   const z = Math.max(10, Math.min(15, Math.round(zoom)));
   return `z${z}`;
 }
+
 function escapeHtml(s) {
+  // Prevent HTML injection in labels and popups
   return String(s)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
@@ -144,8 +201,12 @@ function escapeHtml(s) {
 }
 
 /* =========================================================
-   Staten Island Mode (toggle anywhere)
+   STATEN ISLAND MODE
+   - Toggle button persists in localStorage
+   - When ON: Staten Island zones recolor by SI-only percentile
+   - Other boroughs remain NYC-wide colors
    ========================================================= */
+
 const btnStatenIsland = document.getElementById("btnStatenIsland");
 const modeNote = document.getElementById("modeNote");
 
@@ -158,6 +219,7 @@ function isStatenIslandFeature(props) {
 }
 
 function colorFromLocalRating(r) {
+  // Same thresholds as NYC-wide rating buckets
   const x = Math.max(1, Math.min(100, Math.round(r)));
   if (x >= 90) return { bucket: "green", color: "#00b050" };
   if (x >= 80) return { bucket: "purple", color: "#8000ff" };
@@ -168,9 +230,12 @@ function colorFromLocalRating(r) {
 }
 
 function applyStatenLocalView(frame) {
+  // Adds derived properties:
+  // - si_local_rating, si_local_bucket, si_local_color
   const feats = frame?.polygons?.features || [];
   if (!feats.length) return frame;
 
+  // Collect SI ratings only
   const siRatings = [];
   for (const f of feats) {
     const props = f.properties || {};
@@ -179,12 +244,15 @@ function applyStatenLocalView(frame) {
     if (!Number.isFinite(r)) continue;
     siRatings.push(r);
   }
+
+  // Not enough samples => no local recolor
   if (siRatings.length < 3) return frame;
 
   const sorted = siRatings.slice().sort((a, b) => a - b);
   const n = sorted.length;
 
   function percentileOfRating(r) {
+    // returns p in [0..1] percentile rank (robust)
     let lo = 0, hi = n - 1, ans = -1;
     while (lo <= hi) {
       const mid = (lo + hi) >> 1;
@@ -195,6 +263,7 @@ function applyStatenLocalView(frame) {
     return Math.max(0, Math.min(1, ans / (n - 1)));
   }
 
+  // Assign SI-local bucket/color for SI zones
   for (const f of feats) {
     const props = f.properties || {};
     if (!isStatenIslandFeature(props)) {
@@ -219,6 +288,7 @@ function applyStatenLocalView(frame) {
 }
 
 function syncStatenIslandUI() {
+  // Updates button text + note text based on mode state
   if (btnStatenIsland) {
     btnStatenIsland.textContent = statenIslandMode ? "Staten Island Mode: ON" : "Staten Island Mode: OFF";
     btnStatenIsland.classList.toggle("on", !!statenIslandMode);
@@ -231,7 +301,7 @@ function syncStatenIslandUI() {
 }
 syncStatenIslandUI();
 
-// Harden touch/click so it always toggles (iPhone + Tesla)
+// Touch/click hardening (prevents map drag from swallowing the click)
 if (btnStatenIsland) {
   btnStatenIsland.addEventListener("pointerdown", (e) => e.stopPropagation());
   btnStatenIsland.addEventListener("touchstart", (e) => e.stopPropagation(), { passive: true });
@@ -242,10 +312,11 @@ if (btnStatenIsland) {
     statenIslandMode = !statenIslandMode;
     localStorage.setItem(LS_KEY_STATEN, statenIslandMode ? "1" : "0");
     syncStatenIslandUI();
-    if (currentFrame) renderFrame(currentFrame); // re-render regardless of your location
+    if (currentFrame) renderFrame(currentFrame); // re-render to apply new colors
   });
 }
 
+// When Staten Mode is on, use SI-local bucket/color for SI zones
 function effectiveBucket(props) {
   if (statenIslandMode && isStatenIslandFeature(props) && props.si_local_bucket) return props.si_local_bucket;
   return (props.bucket || "").trim();
@@ -257,6 +328,7 @@ function effectiveColor(props) {
 }
 
 function labelHTML(props, zoom) {
+  // Builds tooltip HTML for zone labels (center of polygons)
   const name = (props.zone_name || "").trim();
   if (!name) return "";
 
@@ -275,8 +347,12 @@ function labelHTML(props, zoom) {
 }
 
 /* =========================================================
-   Recommendation + Navigation
+   RECOMMENDATION + NAVIGATION
+   - Only recommends Blue/Purple/Green zones
+   - Prefers closer zones using a distance penalty
+   - Creates Google Maps "Navigate" URL
    ========================================================= */
+
 const recommendEl = document.getElementById("recommendLine");
 const navBtn = document.getElementById("navBtn");
 
@@ -287,7 +363,9 @@ function setNavDisabled(disabled) {
   if (!navBtn) return;
   navBtn.classList.toggle("disabled", !!disabled);
 }
+
 function setNavDestination(dest) {
+  // Sets destination used by Navigate button
   recommendedDest = dest || null;
   if (!navBtn) return;
 
@@ -306,6 +384,7 @@ function setNavDestination(dest) {
 }
 
 function haversineMiles(a, b) {
+  // Haversine distance in miles
   const R = 3958.7613;
   const toRad = (x) => (x * Math.PI) / 180;
 
@@ -322,6 +401,7 @@ function haversineMiles(a, b) {
 }
 
 function geometryCenter(geom) {
+  // Gets approximate center by averaging polygon points
   let pts = [];
   if (!geom) return null;
 
@@ -347,7 +427,7 @@ function geometryCenter(geom) {
   return { lat: sumLat / pts.length, lng: sumLng / pts.length };
 }
 
-// Blue+ rule on effective bucket
+// Recommendation uses effective bucket (SI-local if enabled)
 function updateRecommendation(frame) {
   if (!recommendEl) return;
 
@@ -364,7 +444,10 @@ function updateRecommendation(frame) {
     return;
   }
 
+  // Only recommend top buckets
   const allowed = new Set(["blue", "purple", "green"]);
+
+  // Distance penalty: higher = prefers closer zones more strongly
   const DIST_PENALTY_PER_MILE = 4.0;
 
   let best = null;
@@ -423,18 +506,23 @@ function updateRecommendation(frame) {
   });
 }
 
-// ---------- Leaflet map ----------
+/* =========================================================
+   LEAFLET MAP SETUP
+   ========================================================= */
+
 const slider = document.getElementById("slider");
 const timeLabel = document.getElementById("timeLabel");
 
+// Base map view
 const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 10);
 
+// Tile layer (Carto basemap)
 L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
   attribution: "&copy; OpenStreetMap &copy; CARTO",
   maxZoom: 19,
 }).addTo(map);
 
-// NEW: panes so the nav arrow is always above labels/tooltips
+// Panes keep nav arrow above labels/tooltips
 const labelsPane = map.createPane("labelsPane");
 labelsPane.style.zIndex = 450; // above polygons, below marker
 const navPane = map.createPane("navPane");
@@ -446,6 +534,7 @@ let minutesOfWeek = [];
 let currentFrame = null;
 
 function buildPopupHTML(props) {
+  // Popup shows NYC rating and optionally SI-local rating
   const zoneName = (props.zone_name || "").trim();
   const borough = (props.borough || "").trim();
 
@@ -472,11 +561,16 @@ function buildPopupHTML(props) {
 }
 
 function renderFrame(frame) {
+  // Save current frame for re-render on zoom or SI-mode toggles
   currentFrame = frame;
+
+  // SI recolor is applied on top of the frame properties
   if (statenIslandMode) applyStatenLocalView(currentFrame);
 
+  // Update bottom time label
   timeLabel.textContent = formatNYCLabel(currentFrame.time);
 
+  // Remove old polygons
   if (geoLayer) {
     geoLayer.remove();
     geoLayer = null;
@@ -485,6 +579,7 @@ function renderFrame(frame) {
   const zoomNow = map.getZoom();
   const zClass = zoomClass(zoomNow);
 
+  // Draw polygons for this frame
   geoLayer = L.geoJSON(currentFrame.polygons, {
     style: (feature) => {
       const props = feature?.properties || {};
@@ -500,9 +595,11 @@ function renderFrame(frame) {
       };
     },
     onEachFeature: (feature, layer) => {
+      // Popup on zone tap
       const props = feature.properties || {};
       layer.bindPopup(buildPopupHTML(props), { maxWidth: 320 });
 
+      // Center label tooltip (demand-priority visibility)
       const html = labelHTML(props, zoomNow);
       if (!html) return;
 
@@ -512,20 +609,23 @@ function renderFrame(frame) {
         className: `zone-label ${zClass}`,
         opacity: 0.92,
         interactive: false,
-        pane: "labelsPane", // NEW: keep labels under nav arrow
+        pane: "labelsPane", // keep labels under nav arrow
       });
     },
   }).addTo(map);
 
+  // Update recommendation line & navigate link based on current frame
   updateRecommendation(currentFrame);
 }
 
 async function loadFrame(idx) {
+  // Loads one frame JSON by index
   const frame = await fetchJSON(`${RAILWAY_BASE}/frame/${idx}`);
   renderFrame(frame);
 }
 
 async function loadTimeline() {
+  // Loads timeline once, sets slider range, starts at NYC "now"
   const t = await fetchJSON(`${RAILWAY_BASE}/timeline`);
   timeline = Array.isArray(t) ? t : (t.timeline || []);
   if (!timeline.length) throw new Error("Timeline empty. Run /generate once on Railway.");
@@ -543,10 +643,12 @@ async function loadTimeline() {
   await loadFrame(idx);
 }
 
+// Re-render on zoom to update label visibility and sizes
 map.on("zoomend", () => {
   if (currentFrame) renderFrame(currentFrame);
 });
 
+// Slider input loads that frame (debounced so it feels smooth)
 let sliderDebounce = null;
 slider.addEventListener("input", () => {
   const idx = Number(slider.value);
@@ -555,12 +657,17 @@ slider.addEventListener("input", () => {
 });
 
 /* =========================================================
-   Auto-center button (inside bottom bar) - stable logic
+   AUTO-CENTER TOGGLE (stable logic)
+   - Auto-center turns OFF if user drags/zooms manually
+   - Programmatic pan/zoom is protected from disabling it
    ========================================================= */
+
 const btnCenter = document.getElementById("btnCenter");
 let autoCenter = true;
 
+// Prevent autoCenter from turning OFF when we do programmatic pan/zoom
 let suppressAutoDisableUntil = 0;
+
 function suppressAutoDisableFor(ms, fn) {
   suppressAutoDisableUntil = Date.now() + ms;
   fn();
@@ -574,6 +681,7 @@ function syncCenterButton() {
 syncCenterButton();
 
 if (btnCenter) {
+  // Stop map gestures from swallowing the click
   btnCenter.addEventListener("pointerdown", (e) => e.stopPropagation());
   btnCenter.addEventListener("touchstart", (e) => e.stopPropagation(), { passive: true });
 
@@ -584,6 +692,7 @@ if (btnCenter) {
     autoCenter = !autoCenter;
     syncCenterButton();
 
+    // If turning ON and we have location, jump to you
     if (autoCenter && userLatLng) {
       const z = Math.max(map.getZoom(), AUTO_CENTER_MIN_ZOOM);
       suppressAutoDisableFor(900, () => map.setView(userLatLng, z, { animate: true }));
@@ -592,6 +701,7 @@ if (btnCenter) {
 }
 
 function disableAutoCenterBecauseUserIsExploring() {
+  // Only disable if user gesture AND not currently suppressed
   if (Date.now() < suppressAutoDisableUntil) return;
   if (!autoCenter) return;
   autoCenter = false;
@@ -600,9 +710,13 @@ function disableAutoCenterBecauseUserIsExploring() {
 map.on("dragstart", disableAutoCenterBecauseUserIsExploring);
 map.on("zoomstart", disableAutoCenterBecauseUserIsExploring);
 
-/* =========================
-   Live location arrow + auto-center
-   ========================= */
+/* =========================================================
+   LIVE LOCATION ARROW (navigation triangle)
+   - Uses geolocation.watchPosition
+   - Uses heading if available, else uses movement bearing
+   - Auto-centers when enabled
+   ========================================================= */
+
 let gpsFirstFixDone = false;
 let navMarker = null;
 let lastPos = null;
@@ -610,6 +724,7 @@ let lastHeadingDeg = 0;
 let lastMoveTs = 0;
 
 function makeNavIcon() {
+  // Marker is a divIcon containing triangle + pulse
   return L.divIcon({
     className: "",
     html: `<div id="navWrap" class="navArrowWrap navPulse"><div class="navArrow"></div></div>`,
@@ -619,6 +734,7 @@ function makeNavIcon() {
 }
 
 function setNavVisual(isMoving) {
+  // moving => glow, stationary => pulse ring
   const el = document.getElementById("navWrap");
   if (!el) return;
   el.classList.toggle("navMoving", !!isMoving);
@@ -626,12 +742,14 @@ function setNavVisual(isMoving) {
 }
 
 function setNavRotation(deg) {
+  // rotate the wrapper (triangle points toward heading)
   const el = document.getElementById("navWrap");
   if (!el) return;
   el.style.transform = `rotate(${deg}deg)`;
 }
 
 function computeBearingDeg(from, to) {
+  // Bearing from A -> B in degrees (0..360)
   const toRad = (x) => (x * Math.PI) / 180;
   const toDeg = (x) => (x * 180) / Math.PI;
 
@@ -653,18 +771,19 @@ function startLocationWatch() {
     return;
   }
 
+  // Marker pane keeps it above labels/polygons
   navMarker = L.marker([40.7128, -74.0060], {
     icon: makeNavIcon(),
     interactive: false,
     zIndexOffset: 2000000,
-    pane: "navPane", // NEW: always above labels
+    pane: "navPane",
   }).addTo(map);
 
   navigator.geolocation.watchPosition(
     (pos) => {
       const lat = pos.coords.latitude;
       const lng = pos.coords.longitude;
-      const heading = pos.coords.heading;
+      const heading = pos.coords.heading; // may be null on some devices
       const ts = pos.timestamp || Date.now();
 
       userLatLng = { lat, lng };
@@ -673,12 +792,14 @@ function startLocationWatch() {
       let isMoving = false;
 
       if (lastPos) {
+        // Determine movement speed
         const dMi = haversineMiles({ lat: lastPos.lat, lng: lastPos.lng }, userLatLng);
         const dtSec = Math.max(1, (ts - lastPos.ts) / 1000);
         const mph = (dMi / dtSec) * 3600;
 
         isMoving = mph >= 2.0;
 
+        // Use device heading if available, else compute bearing from movement
         if (typeof heading === "number" && Number.isFinite(heading)) {
           lastHeadingDeg = heading;
         } else if (dMi > 0.01) {
@@ -693,14 +814,15 @@ function startLocationWatch() {
       setNavRotation(lastHeadingDeg);
       setNavVisual(isMoving);
 
-      // NEW: better follow behavior + closer zoom
+      // Follow behavior + keep minimum zoom when following
       const desiredZoom = Math.max(map.getZoom(), AUTO_CENTER_MIN_ZOOM);
 
       if (!gpsFirstFixDone) {
+        // First fix: jump to you
         gpsFirstFixDone = true;
         suppressAutoDisableFor(1200, () => map.setView(userLatLng, desiredZoom, { animate: true }));
       } else if (autoCenter) {
-        // If user is zoomed out, bring them back in; otherwise just pan smoothly.
+        // If user is zoomed out too far, bring them back in; else just pan
         if (map.getZoom() < AUTO_CENTER_MIN_ZOOM) {
           suppressAutoDisableFor(900, () => map.setView(userLatLng, desiredZoom, { animate: true }));
         } else {
@@ -708,6 +830,7 @@ function startLocationWatch() {
         }
       }
 
+      // Keep recommendation updated as you move
       if (currentFrame) updateRecommendation(currentFrame);
     },
     (err) => {
@@ -722,6 +845,7 @@ function startLocationWatch() {
     }
   );
 
+  // Visual: if you haven't moved in ~5 seconds, show pulse ring
   setInterval(() => {
     const now = Date.now();
     const recentlyMoved = lastMoveTs && (now - lastMoveTs) < 5000;
@@ -729,7 +853,11 @@ function startLocationWatch() {
   }, 1200);
 }
 
-// ---------- Auto-refresh every 5 minutes ----------
+/* =========================================================
+   AUTO-REFRESH CURRENT FRAME (no page reload)
+   - Keeps slider position but refreshes the same frame index
+   ========================================================= */
+
 async function refreshCurrentFrame() {
   try {
     const idx = Number(slider.value || "0");
@@ -740,10 +868,15 @@ async function refreshCurrentFrame() {
 }
 setInterval(refreshCurrentFrame, REFRESH_MS);
 
-// Boot
+/* =========================================================
+   BOOT
+   ========================================================= */
+
 setNavDestination(null);
+
 loadTimeline().catch((err) => {
   console.error(err);
   timeLabel.textContent = `Error loading timeline: ${err.message}`;
 });
+
 startLocationWatch();
