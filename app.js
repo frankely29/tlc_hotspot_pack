@@ -1,11 +1,12 @@
 const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
 const BIN_MINUTES = 20;
 
-// Refresh current frame every 5 minutes (no page reload needed)
-const REFRESH_MS = 5 * 60 * 1000;
+// Auto-refresh current frame (no page reload)
+const REFRESH_MS = 60 * 1000;          // <- change this (ex: 30*1000, 2*60*1000, etc)
+const TIMELINE_REFRESH_MS = 10 * 60 * 1000;
 
-// When auto-center is ON and you're moving, keep at least this zoom
-const AUTO_CENTER_MIN_ZOOM_MOVING = 13;
+// Auto-follow zoom (more zoomed-in when you start / re-enable)
+const AUTO_FOLLOW_ZOOM = 15;
 
 // ---------- Legend minimize ----------
 const legendEl = document.getElementById("legend");
@@ -25,6 +26,7 @@ const LABEL_MAX_CHARS_MID = 14;
 function shouldShowLabel(bucket, zoom) {
   if (zoom < LABEL_ZOOM_MIN) return false;
   const b = (bucket || "").trim();
+  if (b === "nodata") return false; // hide labels for nodata zones (keeps map cleaner)
   if (zoom >= 15) return true;
   if (zoom === 14) return b !== "red";
   if (zoom === 13) return b === "green" || b === "purple" || b === "blue" || b === "sky";
@@ -119,6 +121,7 @@ function prettyBucket(b) {
     sky: "Normal",
     yellow: "Below Normal",
     red: "Very Low / Avoid",
+    nodata: "No Data (low pickups)",
   };
   return m[b] || (b ?? "");
 }
@@ -426,47 +429,89 @@ function updateRecommendation(frame) {
 const slider = document.getElementById("slider");
 const timeLabel = document.getElementById("timeLabel");
 
+// Create map
 const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 10);
 
+// Base tiles
 L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
   attribution: "&copy; OpenStreetMap &copy; CARTO",
   maxZoom: 19,
 }).addTo(map);
 
-// IMPORTANT: Create a dedicated pane ABOVE tooltips/labels so your arrow is never covered.
+// IMPORTANT: make a pane ABOVE tooltips so your arrow is NEVER covered by borough/zone labels
 map.createPane("navPane");
-map.getPane("navPane").style.zIndex = 1200;         // higher than tooltipPane (typically ~650)
-map.getPane("navPane").style.pointerEvents = "none";
+map.getPane("navPane").style.zIndex = 2000; // higher than tooltipPane(650) and popupPane(700)
 
 let geoLayer = null;
 let timeline = [];
 let minutesOfWeek = [];
 let currentFrame = null;
 
+// X markers layer for low-sample zones
+let xLayer = L.layerGroup().addTo(map);
+
 function buildPopupHTML(props) {
   const zoneName = (props.zone_name || "").trim();
   const borough = (props.borough || "").trim();
 
-  const rating = props.rating ?? "";
-  const bucket = props.bucket ?? "";
-  const pickups = props.pickups ?? "";
-  const pay = props.avg_driver_pay == null ? "n/a" : Number(props.avg_driver_pay).toFixed(2);
+  const bucket = (props.bucket ?? "").toString();
+  const pickups = props.pickups ?? 0;
+  const minTrips = props.min_trips_per_window ?? null;
+
+  const rating = props.rating ?? null;
+  const pay = props.avg_driver_pay == null ? null : Number(props.avg_driver_pay);
 
   let extra = "";
   if (statenIslandMode && isStatenIslandFeature(props) && Number.isFinite(Number(props.si_local_rating))) {
     extra = `<div style="margin-top:6px;"><b>Staten Local Rating:</b> ${props.si_local_rating} (${prettyBucket(props.si_local_bucket)})</div>`;
   }
 
+  // For nodata/low-sample zones, tell the truth: not enough trips to score
+  if (bucket === "nodata" || props.low_sample === true || rating == null) {
+    const needTxt = Number.isFinite(Number(minTrips)) ? `Need ≥ ${minTrips} trips in this ${BIN_MINUTES}m window.` : "";
+    return `
+      <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; font-size:13px;">
+        <div style="font-weight:800; margin-bottom:2px;">${escapeHtml(zoneName || `Zone ${props.LocationID ?? ""}`)}</div>
+        ${borough ? `<div style="opacity:0.8; margin-bottom:6px;">${escapeHtml(borough)}</div>` : `<div style="margin-bottom:6px;"></div>`}
+        <div><b>Status:</b> No Data / Low Sample</div>
+        <div style="margin-top:6px;"><b>Pickups (last ${BIN_MINUTES} min):</b> ${pickups}</div>
+        ${needTxt ? `<div style="margin-top:4px; opacity:0.9;">${escapeHtml(needTxt)}</div>` : ""}
+      </div>
+    `;
+  }
+
+  const payTxt = Number.isFinite(pay) ? pay.toFixed(2) : "n/a";
   return `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; font-size:13px;">
       <div style="font-weight:800; margin-bottom:2px;">${escapeHtml(zoneName || `Zone ${props.LocationID ?? ""}`)}</div>
       ${borough ? `<div style="opacity:0.8; margin-bottom:6px;">${escapeHtml(borough)}</div>` : `<div style="margin-bottom:6px;"></div>`}
-      <div><b>NYC Rating:</b> ${rating} (${prettyBucket(bucket)})</div>
+      <div><b>NYC Rating:</b> ${rating} (${prettyBucket(props.bucket)})</div>
       ${extra}
       <div style="margin-top:6px;"><b>Pickups (last ${BIN_MINUTES} min):</b> ${pickups}</div>
-      <div><b>Avg Driver Pay:</b> $${pay}</div>
+      <div><b>Avg Driver Pay:</b> $${payTxt}</div>
     </div>
   `;
+}
+
+function makeXIcon() {
+  return L.divIcon({
+    className: "",
+    html: `
+      <div style="
+        width:34px;height:34px;border-radius:999px;
+        background: rgba(255,255,255,0.85);
+        border: 2px solid rgba(0,0,0,0.20);
+        display:flex;align-items:center;justify-content:center;
+        font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
+        font-weight: 1000;
+        font-size: 22px;
+        color: rgba(0,0,0,0.65);
+        box-shadow: 0 2px 10px rgba(0,0,0,0.12);
+      ">✕</div>
+    `,
+    iconSize: [34, 34],
+    iconAnchor: [17, 17],
+  });
 }
 
 function renderFrame(frame) {
@@ -479,6 +524,9 @@ function renderFrame(frame) {
     geoLayer.remove();
     geoLayer = null;
   }
+
+  // clear X markers
+  xLayer.clearLayers();
 
   const zoomNow = map.getZoom();
   const zClass = zoomClass(zoomNow);
@@ -502,15 +550,29 @@ function renderFrame(frame) {
       layer.bindPopup(buildPopupHTML(props), { maxWidth: 320 });
 
       const html = labelHTML(props, zoomNow);
-      if (!html) return;
+      if (html) {
+        layer.bindTooltip(html, {
+          permanent: true,
+          direction: "center",
+          className: `zone-label ${zClass}`,
+          opacity: 0.92,
+          interactive: false,
+        });
+      }
 
-      layer.bindTooltip(html, {
-        permanent: true,
-        direction: "center",
-        className: `zone-label ${zClass}`,
-        opacity: 0.92,
-        interactive: false,
-      });
+      // Add an X marker for low-sample/nodata zones
+      if (props.low_sample === true || (props.bucket || "").trim() === "nodata" || props.rating == null) {
+        const center = geometryCenter(feature.geometry);
+        if (center) {
+          xLayer.addLayer(
+            L.marker([center.lat, center.lng], {
+              icon: makeXIcon(),
+              interactive: false,
+              zIndexOffset: 500, // above polygons
+            })
+          );
+        }
+      }
     },
   }).addTo(map);
 
@@ -552,7 +614,7 @@ slider.addEventListener("input", () => {
 });
 
 /* =========================================================
-   Auto-center button (inside bottom bar) - stable logic
+   Auto-center button - stable logic
    ========================================================= */
 const btnCenter = document.getElementById("btnCenter");
 let autoCenter = true;
@@ -582,7 +644,7 @@ if (btnCenter) {
     syncCenterButton();
 
     if (autoCenter && userLatLng) {
-      suppressAutoDisableFor(800, () => map.panTo(userLatLng, { animate: true }));
+      suppressAutoDisableFor(800, () => map.setView(userLatLng, Math.max(map.getZoom(), AUTO_FOLLOW_ZOOM), { animate: true }));
     }
   });
 }
@@ -597,7 +659,7 @@ map.on("dragstart", disableAutoCenterBecauseUserIsExploring);
 map.on("zoomstart", disableAutoCenterBecauseUserIsExploring);
 
 /* =========================
-   Live location arrow + follow
+   Live location arrow + auto-center (ALWAYS ON TOP)
    ========================= */
 let gpsFirstFixDone = false;
 let navMarker = null;
@@ -652,8 +714,8 @@ function startLocationWatch() {
   navMarker = L.marker([40.7128, -74.0060], {
     icon: makeNavIcon(),
     interactive: false,
-    zIndexOffset: 999999,     // extra safety
-    pane: "navPane",          // ALWAYS above labels
+    zIndexOffset: 999999,
+    pane: "navPane", // <- forces above labels
   }).addTo(map);
 
   navigator.geolocation.watchPosition(
@@ -667,12 +729,11 @@ function startLocationWatch() {
       if (navMarker) navMarker.setLatLng(userLatLng);
 
       let isMoving = false;
-      let mph = 0;
 
       if (lastPos) {
         const dMi = haversineMiles({ lat: lastPos.lat, lng: lastPos.lng }, userLatLng);
         const dtSec = Math.max(1, (ts - lastPos.ts) / 1000);
-        mph = (dMi / dtSec) * 3600;
+        const mph = (dMi / dtSec) * 3600;
 
         isMoving = mph >= 2.0;
 
@@ -690,16 +751,11 @@ function startLocationWatch() {
       setNavRotation(lastHeadingDeg);
       setNavVisual(isMoving);
 
-      // follow behavior
       if (!gpsFirstFixDone) {
         gpsFirstFixDone = true;
-        const targetZoom = Math.max(map.getZoom(), 14);
-        suppressAutoDisableFor(1200, () => map.setView(userLatLng, targetZoom, { animate: true }));
-      } else if (autoCenter) {
-        // If you're moving, keep a slightly closer zoom (but don't force zoom-out).
-        if (isMoving && map.getZoom() < AUTO_CENTER_MIN_ZOOM_MOVING) {
-          suppressAutoDisableFor(700, () => map.setView(userLatLng, AUTO_CENTER_MIN_ZOOM_MOVING, { animate: true }));
-        } else {
+        suppressAutoDisableFor(1200, () => map.setView(userLatLng, AUTO_FOLLOW_ZOOM, { animate: true }));
+      } else {
+        if (autoCenter) {
           suppressAutoDisableFor(700, () => map.panTo(userLatLng, { animate: true }));
         }
       }
@@ -726,7 +782,7 @@ function startLocationWatch() {
 }
 
 /* =========================================================
-   Auto-refresh (NO page reload)
+   Auto-refresh without page reload
    ========================================================= */
 async function refreshCurrentFrame() {
   try {
@@ -736,14 +792,30 @@ async function refreshCurrentFrame() {
     console.warn("Auto-refresh failed:", e);
   }
 }
-setInterval(refreshCurrentFrame, REFRESH_MS);
 
-// Also refresh when you come back to the tab/app (so it updates without you reloading)
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") {
-    refreshCurrentFrame().catch(() => {});
+async function refreshTimelineSometimes() {
+  try {
+    // keeps things in sync if you re-generate on backend
+    const t = await fetchJSON(`${RAILWAY_BASE}/timeline`);
+    const newTimeline = Array.isArray(t) ? t : (t.timeline || []);
+    if (!Array.isArray(newTimeline) || !newTimeline.length) return;
+
+    if (newTimeline.length !== timeline.length) {
+      timeline = newTimeline;
+      minutesOfWeek = timeline.map(minuteOfWeekFromIso);
+      slider.max = String(timeline.length - 1);
+      // keep current slider index if possible
+      const idx = Math.min(Number(slider.value || "0"), timeline.length - 1);
+      slider.value = String(idx);
+      await loadFrame(idx);
+    }
+  } catch (e) {
+    // silent
   }
-});
+}
+
+setInterval(refreshCurrentFrame, REFRESH_MS);
+setInterval(refreshTimelineSometimes, TIMELINE_REFRESH_MS);
 
 // Boot
 setNavDestination(null);
