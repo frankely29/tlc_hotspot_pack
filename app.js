@@ -426,7 +426,7 @@ function updateRecommendation(frame) {
 const slider = document.getElementById("slider");
 const timeLabel = document.getElementById("timeLabel");
 
-const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 10);
+const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 11);
 
 L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
   attribution: "&copy; OpenStreetMap &copy; CARTO",
