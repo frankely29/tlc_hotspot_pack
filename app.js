@@ -5,7 +5,7 @@ const BIN_MINUTES = 20;
 const REFRESH_MS = 5 * 60 * 1000;
 
 // When auto-center is ON and you're moving, keep at least this zoom
-const AUTO_CENTER_MIN_ZOOM_MOVING = 11;
+const AUTO_CENTER_MIN_ZOOM_MOVING = 13;
 
 // ---------- Legend minimize ----------
 const legendEl = document.getElementById("legend");
