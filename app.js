@@ -1,48 +1,29 @@
 /* =========================================================
-   NYC TLC Hotspot Map (Front-end) - app.js
-   =========================================================
-   PURPOSE (high level)
-   - Shows NYC TLC hotspot “frames” (20-minute bins) coming from your Railway backend
-   - Slider + map can run in LIVE mode (auto-sync to NYC current time)
-   - Optional Auto-center follows your GPS arrow, BUT you can still explore the map freely
-
-   KEY UX RULES (your request)
-   - Auto-center should NOT trap you. You can drag/zoom anytime.
-   - When you drag/zoom (user exploring), Auto-center pauses for a short time.
-   - You can tap Auto-center back ON at any time.
-
-   WARNING / WHAT BREAKS
-   1) If your backend has no /timeline yet → timeline fetch will fail.
-      Fix: hit /generate once (or ensure Option A auto-generation ran).
-   2) If geolocation permission is blocked → arrow won’t move and recs won’t work.
-   3) If you change BIN_MINUTES here but backend frames were built with a different bin,
-      your “NYC now rounding” will not align perfectly (still works, but mismatched bins).
+   NYC TLC Hotspot Map (Frontend)
+   - Keeps 20-minute bins (no backend overload)
+   - Auto-updates on iPhone Safari without manual refresh:
+       1) Every 60s: if NYC is now in a new 20-min bin -> auto move slider + load new frame
+       2) Every 5 min: refresh current frame (keeps data fresh + prevents Safari staleness)
    ========================================================= */
 
 const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
 const BIN_MINUTES = 20;
 
-/* Auto-refresh current selected frame every 5 minutes (keeps colors/polygons updated) */
+// Refresh current frame every 5 minutes (re-fetch same slider idx)
 const REFRESH_MS = 5 * 60 * 1000;
 
-/* FOLLOW / AUTO-CENTER SETTINGS
-   - AUTO_CENTER_MIN_ZOOM controls how zoomed-in we go when re-centering.
-   - Lower number = more zoomed OUT (shows more area).
-*/
-const AUTO_CENTER_MIN_ZOOM = 13;
+// Auto-follow closer zoom when following
+const AUTO_CENTER_MIN_ZOOM = 15;
 
-/* When you manually drag/zoom, we pause auto-follow for this many ms.
-   Increase if you want more time to explore without the map re-centering. */
-const EXPLORE_PAUSE_MS = 20_000;
+// How often we check NYC time to auto-advance the slider/frame (cheap)
+const NYC_CLOCK_TICK_MS = 60 * 1000;
 
-/* LIVE MODE SETTINGS (slider sync to NYC “now”) */
-const LIVE_MODE = true;
-/* How often we try to snap slider to NYC “now” */
-const LIVE_TICK_MS = 20_000;
-/* How often we refresh /timeline (useful if backend regenerated frames) */
-const TIMELINE_REFRESH_MS = 30 * 60 * 1000;
+// If user recently touched slider, don't auto-advance for a bit
+const USER_SLIDER_GRACE_MS = 25 * 1000;
 
-// ---------- Legend minimize ----------
+/* =========================================================
+   Legend minimize
+   ========================================================= */
 const legendEl = document.getElementById("legend");
 const legendToggleBtn = document.getElementById("legendToggle");
 if (legendEl && legendToggleBtn) {
@@ -53,9 +34,7 @@ if (legendEl && legendToggleBtn) {
 }
 
 /* =========================================================
-   Label Visibility (mobile-friendly)
-   - We show fewer labels when zoomed out (cleaner)
-   - We prioritize better buckets at mid zoom levels
+   Label visibility rules (mobile-friendly)
    ========================================================= */
 const LABEL_ZOOM_MIN = 10;
 const BOROUGH_ZOOM_SHOW = 15;
@@ -73,10 +52,7 @@ function shouldShowLabel(bucket, zoom) {
 }
 
 /* =========================================================
-   Time helpers (NYC time alignment)
-   - Backend frames contain an ISO string like "2025-01-06T00:20:00"
-   - We treat that as an ISO-without-timezone label (week anchor style)
-   - Slider auto-sync picks closest frame to NYC "now" minute-of-week
+   Time helpers (backend timeline is "no TZ" ISO strings)
    ========================================================= */
 function parseIsoNoTz(iso) {
   const [d, t] = iso.split("T");
@@ -87,8 +63,8 @@ function parseIsoNoTz(iso) {
 function dowMon0FromIso(iso) {
   const { Y, M, D, h, m, s } = parseIsoNoTz(iso);
   const dt = new Date(Date.UTC(Y, M - 1, D, h, m, s));
-  const dowSun0 = dt.getUTCDay();
-  return dowSun0 === 0 ? 6 : dowSun0 - 1;
+  const dowSun0 = dt.getUTCDay(); // 0=Sun..6=Sat
+  return dowSun0 === 0 ? 6 : dowSun0 - 1; // Mon=0..Sun=6
 }
 function minuteOfWeekFromIso(iso) {
   const { h, m } = parseIsoNoTz(iso);
@@ -104,6 +80,8 @@ function formatNYCLabel(iso) {
   const mm = String(m).padStart(2, "0");
   return `${names[dow_m]} ${hr12}:${mm} ${ampm}`;
 }
+
+// Get "NYC minute-of-week", rounded DOWN to the current BIN_MINUTES bucket
 function getNowNYCMinuteOfWeekRounded() {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
@@ -125,10 +103,14 @@ function getNowNYCMinuteOfWeekRounded() {
   const total = dow_m * 1440 + hour * 60 + minute;
   return Math.floor(total / BIN_MINUTES) * BIN_MINUTES;
 }
+
+// Cyclic distance in a 7-day week
 function cyclicDiff(a, b, mod) {
   const d = Math.abs(a - b);
   return Math.min(d, mod - d);
 }
+
+// Pick the closest frame index to the NYC target minute-of-week
 function pickClosestIndex(minutesOfWeekArr, target) {
   let bestIdx = 0;
   let bestDiff = Infinity;
@@ -143,8 +125,7 @@ function pickClosestIndex(minutesOfWeekArr, target) {
 }
 
 /* =========================================================
-   Network
-   - fetchJSON with strict error message so you can debug quickly
+   Network helper
    ========================================================= */
 async function fetchJSON(url) {
   const res = await fetch(url, { cache: "no-store", mode: "cors" });
@@ -158,7 +139,7 @@ async function fetchJSON(url) {
 }
 
 /* =========================================================
-   UI helper: bucket → label
+   Buckets (display names)
    ========================================================= */
 function prettyBucket(b) {
   const m = {
@@ -195,9 +176,7 @@ function escapeHtml(s) {
 }
 
 /* =========================================================
-   Staten Island Mode (local recolor)
-   - When ON: Staten Island features get their own percentile-based recolor
-   - Other boroughs remain NYC-wide
+   Staten Island Mode (local percentile recolor)
    ========================================================= */
 const btnStatenIsland = document.getElementById("btnStatenIsland");
 const modeNote = document.getElementById("modeNote");
@@ -238,15 +217,11 @@ function applyStatenLocalView(frame) {
   const n = sorted.length;
 
   function percentileOfRating(r) {
-    let lo = 0,
-      hi = n - 1,
-      ans = -1;
+    let lo = 0, hi = n - 1, ans = -1;
     while (lo <= hi) {
       const mid = (lo + hi) >> 1;
-      if (sorted[mid] <= r) {
-        ans = mid;
-        lo = mid + 1;
-      } else hi = mid - 1;
+      if (sorted[mid] <= r) { ans = mid; lo = mid + 1; }
+      else hi = mid - 1;
     }
     if (n <= 1) return 0;
     return Math.max(0, Math.min(1, ans / (n - 1)));
@@ -283,7 +258,7 @@ function syncStatenIslandUI() {
   if (modeNote) {
     modeNote.innerHTML = statenIslandMode
       ? `Staten Island Mode is <b>ON</b>: Staten Island colors are <b>relative within Staten Island</b> only.<br/>Other boroughs remain NYC-wide.`
-      : `Colors come from rating (1–100) for the selected ${BIN_MINUTES}-minute window.<br/>Time label is NYC time.`;
+      : `Colors come from rating (1–100) for the selected 20-minute window.<br/>Time label is NYC time.`;
   }
 }
 syncStatenIslandUI();
@@ -332,8 +307,6 @@ function labelHTML(props, zoom) {
 
 /* =========================================================
    Recommendation + Navigation
-   - Picks best “Blue+” zone (blue/purple/green) with distance penalty
-   - Updates whenever your location changes or frame changes
    ========================================================= */
 const recommendEl = document.getElementById("recommendLine");
 const navBtn = document.getElementById("navBtn");
@@ -397,8 +370,7 @@ function geometryCenter(geom) {
 
   if (!pts.length) return null;
 
-  let sumLng = 0,
-    sumLat = 0;
+  let sumLng = 0, sumLat = 0;
   for (const [lng, lat] of pts) {
     sumLng += lng;
     sumLat += lat;
@@ -434,10 +406,9 @@ function updateRecommendation(frame) {
     const b = effectiveBucket(props);
     if (!allowed.has(b)) continue;
 
-    const rating =
-      statenIslandMode && isStatenIslandFeature(props) && Number.isFinite(Number(props.si_local_rating))
-        ? Number(props.si_local_rating)
-        : Number(props.rating ?? NaN);
+    const rating = (statenIslandMode && isStatenIslandFeature(props) && Number.isFinite(Number(props.si_local_rating)))
+      ? Number(props.si_local_rating)
+      : Number(props.rating ?? NaN);
 
     if (!Number.isFinite(rating)) continue;
 
@@ -456,7 +427,7 @@ function updateRecommendation(frame) {
         lng: center.lng,
         name: (props.zone_name || "").trim() || `Zone ${props.LocationID ?? ""}`,
         borough: (props.borough || "").trim(),
-        usedLocal: statenIslandMode && isStatenIslandFeature(props) && Number.isFinite(Number(props.si_local_rating)),
+        usedLocal: (statenIslandMode && isStatenIslandFeature(props) && Number.isFinite(Number(props.si_local_rating))),
       };
     }
   }
@@ -483,23 +454,22 @@ function updateRecommendation(frame) {
 }
 
 /* =========================================================
-   Leaflet map initialization
+   Leaflet map
    ========================================================= */
 const slider = document.getElementById("slider");
 const timeLabel = document.getElementById("timeLabel");
 
-const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.006], 10);
+const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 10);
 
 L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
   attribution: "&copy; OpenStreetMap &copy; CARTO",
   maxZoom: 19,
 }).addTo(map);
 
-/* Panes:
-   - labelsPane: labels sit above polygons, below nav arrow
-   - navPane: nav arrow always on top */
+// Panes so the nav arrow is always above labels/tooltips
 const labelsPane = map.createPane("labelsPane");
 labelsPane.style.zIndex = 450;
+
 const navPane = map.createPane("navPane");
 navPane.style.zIndex = 1000;
 
@@ -508,7 +478,9 @@ let timeline = [];
 let minutesOfWeek = [];
 let currentFrame = null;
 
-/* Popup builder for a zone */
+// Track when user last touched slider so we don't fight them
+let lastUserSliderTs = 0;
+
 function buildPopupHTML(props) {
   const zoneName = (props.zone_name || "").trim();
   const borough = (props.borough || "").trim();
@@ -520,19 +492,13 @@ function buildPopupHTML(props) {
 
   let extra = "";
   if (statenIslandMode && isStatenIslandFeature(props) && Number.isFinite(Number(props.si_local_rating))) {
-    extra = `<div style="margin-top:6px;"><b>Staten Local Rating:</b> ${props.si_local_rating} (${prettyBucket(
-      props.si_local_bucket
-    )})</div>`;
+    extra = `<div style="margin-top:6px;"><b>Staten Local Rating:</b> ${props.si_local_rating} (${prettyBucket(props.si_local_bucket)})</div>`;
   }
 
   return `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; font-size:13px;">
       <div style="font-weight:800; margin-bottom:2px;">${escapeHtml(zoneName || `Zone ${props.LocationID ?? ""}`)}</div>
-      ${
-        borough
-          ? `<div style="opacity:0.8; margin-bottom:6px;">${escapeHtml(borough)}</div>`
-          : `<div style="margin-bottom:6px;"></div>`
-      }
+      ${borough ? `<div style="opacity:0.8; margin-bottom:6px;">${escapeHtml(borough)}</div>` : `<div style="margin-bottom:6px;"></div>`}
       <div><b>NYC Rating:</b> ${rating} (${prettyBucket(bucket)})</div>
       ${extra}
       <div style="margin-top:6px;"><b>Pickups (last ${BIN_MINUTES} min):</b> ${pickups}</div>
@@ -541,7 +507,6 @@ function buildPopupHTML(props) {
   `;
 }
 
-/* Render a single frame (polygons + tooltips + popups) */
 function renderFrame(frame) {
   currentFrame = frame;
   if (statenIslandMode) applyStatenLocalView(currentFrame);
@@ -591,16 +556,14 @@ function renderFrame(frame) {
   updateRecommendation(currentFrame);
 }
 
-/* Load a frame by index */
 async function loadFrame(idx) {
   const frame = await fetchJSON(`${RAILWAY_BASE}/frame/${idx}`);
   renderFrame(frame);
 }
 
-/* Load timeline and initialize slider to NYC “now” */
 async function loadTimeline() {
   const t = await fetchJSON(`${RAILWAY_BASE}/timeline`);
-  timeline = Array.isArray(t) ? t : t.timeline || [];
+  timeline = Array.isArray(t) ? t : (t.timeline || []);
   if (!timeline.length) throw new Error("Timeline empty. Run /generate once on Railway.");
 
   minutesOfWeek = timeline.map(minuteOfWeekFromIso);
@@ -609,67 +572,49 @@ async function loadTimeline() {
   slider.max = String(timeline.length - 1);
   slider.step = "1";
 
+  // Start at NYC "now" bucket (closest available)
   const nowMinWeek = getNowNYCMinuteOfWeekRounded();
   const idx = pickClosestIndex(minutesOfWeek, nowMinWeek);
   slider.value = String(idx);
 
   await loadFrame(idx);
-  lastAutoIdx = idx;
 }
 
-/* Re-render labels on zoom (because label rules depend on zoom level) */
+// Re-render labels on zoom changes
 map.on("zoomend", () => {
   if (currentFrame) renderFrame(currentFrame);
 });
 
-/* Slider input: load selected frame
-   IMPORTANT: this does NOT disable Auto-center.
-   It only changes which time window is displayed. */
+// Slider manual control (debounced)
 let sliderDebounce = null;
 slider.addEventListener("input", () => {
+  lastUserSliderTs = Date.now(); // user is actively exploring time
   const idx = Number(slider.value);
   if (sliderDebounce) clearTimeout(sliderDebounce);
   sliderDebounce = setTimeout(() => loadFrame(idx).catch(console.error), 80);
 });
 
 /* =========================================================
-   Auto-center (FOLLOW) that still lets you explore
-   =========================================================
-   RULE:
-   - Auto-center ON means: we follow your GPS updates.
-   - BUT if you drag/zoom, we PAUSE following for EXPLORE_PAUSE_MS.
-   - Auto-center can remain ON during the pause (we do not force OFF).
-   - After the pause ends, following resumes automatically.
+   Auto-center button (stable logic)
+   - ON: map follows your GPS arrow
+   - OFF: you can explore freely without it snapping back
    ========================================================= */
 const btnCenter = document.getElementById("btnCenter");
 let autoCenter = true;
 
-/* This blocks our “user exploring disables follow” logic for a bit
-   when we do programmatic pan/zoom. */
 let suppressAutoDisableUntil = 0;
 function suppressAutoDisableFor(ms, fn) {
   suppressAutoDisableUntil = Date.now() + ms;
   fn();
 }
 
-/* This is the NEW “pause follow so user can explore” timer */
-let followPausedUntil = 0;
-function pauseFollowFor(ms) {
-  followPausedUntil = Date.now() + ms;
-}
-function isFollowPaused() {
-  return Date.now() < followPausedUntil;
-}
-
 function syncCenterButton() {
   if (!btnCenter) return;
-  const pausedTag = autoCenter && isFollowPaused() ? " (paused)" : "";
-  btnCenter.textContent = autoCenter ? `Auto-center: ON${pausedTag}` : "Auto-center: OFF";
+  btnCenter.textContent = autoCenter ? "Auto-center: ON" : "Auto-center: OFF";
   btnCenter.classList.toggle("on", !!autoCenter);
 }
 syncCenterButton();
 
-/* Clicking the button toggles follow on/off */
 if (btnCenter) {
   btnCenter.addEventListener("pointerdown", (e) => e.stopPropagation());
   btnCenter.addEventListener("touchstart", (e) => e.stopPropagation(), { passive: true });
@@ -679,32 +624,26 @@ if (btnCenter) {
     e.stopPropagation();
 
     autoCenter = !autoCenter;
-    if (autoCenter) {
-      // When turning ON, re-center immediately (and remove pause)
-      followPausedUntil = 0;
-      if (userLatLng) {
-        const z = Math.max(map.getZoom(), AUTO_CENTER_MIN_ZOOM);
-        suppressAutoDisableFor(900, () => map.setView(userLatLng, z, { animate: true }));
-      }
-    }
     syncCenterButton();
+
+    if (autoCenter && userLatLng) {
+      const z = Math.max(map.getZoom(), AUTO_CENTER_MIN_ZOOM);
+      suppressAutoDisableFor(900, () => map.setView(userLatLng, z, { animate: true }));
+    }
   });
 }
 
-/* When user begins exploring, pause follow (do NOT force OFF) */
-function onUserExploreStart() {
-  if (Date.now() < suppressAutoDisableUntil) return; // ignore our own pan/zoom
-  if (!autoCenter) return; // no need to pause if already OFF
-  pauseFollowFor(EXPLORE_PAUSE_MS);
+function disableAutoCenterBecauseUserIsExploring() {
+  if (Date.now() < suppressAutoDisableUntil) return;
+  if (!autoCenter) return;
+  autoCenter = false;
   syncCenterButton();
 }
-
-/* User exploring signals */
-map.on("dragstart", onUserExploreStart);
-map.on("zoomstart", onUserExploreStart);
+map.on("dragstart", disableAutoCenterBecauseUserIsExploring);
+map.on("zoomstart", disableAutoCenterBecauseUserIsExploring);
 
 /* =========================================================
-   GPS arrow marker (always on top)
+   Live location arrow + follow behavior
    ========================================================= */
 let gpsFirstFixDone = false;
 let navMarker = null;
@@ -712,8 +651,8 @@ let lastPos = null;
 let lastHeadingDeg = 0;
 let lastMoveTs = 0;
 
-/* This icon is a DIV. Your index.html CSS controls the “pointy arrow” look. */
 function makeNavIcon() {
+  // NOTE: your pointed arrow styling is in index.html CSS (.navArrow)
   return L.divIcon({
     className: "",
     html: `<div id="navWrap" class="navArrowWrap navPulse"><div class="navArrow"></div></div>`,
@@ -722,7 +661,6 @@ function makeNavIcon() {
   });
 }
 
-/* Glow vs pulse depending on movement */
 function setNavVisual(isMoving) {
   const el = document.getElementById("navWrap");
   if (!el) return;
@@ -730,14 +668,12 @@ function setNavVisual(isMoving) {
   el.classList.toggle("navPulse", !isMoving);
 }
 
-/* Rotate arrow to face heading/bearing */
 function setNavRotation(deg) {
   const el = document.getElementById("navWrap");
   if (!el) return;
   el.style.transform = `rotate(${deg}deg)`;
 }
 
-/* Bearing used if device doesn’t provide heading */
 function computeBearingDeg(from, to) {
   const toRad = (x) => (x * Math.PI) / 180;
   const toDeg = (x) => (x * 180) / Math.PI;
@@ -754,17 +690,16 @@ function computeBearingDeg(from, to) {
   return brng;
 }
 
-/* Start real-time location tracking */
 function startLocationWatch() {
   if (!("geolocation" in navigator)) {
     if (recommendEl) recommendEl.textContent = "Recommended: location not supported";
     return;
   }
 
-  /* Create the arrow marker in navPane so it stays above labels/polygons */
-  navMarker = L.marker([40.7128, -74.006], {
+  // Create marker on a top pane + huge zIndex so it never goes under labels
+  navMarker = L.marker([40.7128, -74.0060], {
     icon: makeNavIcon(),
-    interactive: false, // IMPORTANT: don’t block taps on zones
+    interactive: false,
     zIndexOffset: 2000000,
     pane: "navPane",
   }).addTo(map);
@@ -788,9 +723,7 @@ function startLocationWatch() {
 
         isMoving = mph >= 2.0;
 
-        /* Heading priority:
-           1) Device heading (if available)
-           2) Bearing from last position (if moved enough) */
+        // Use device heading if available; otherwise compute from movement
         if (typeof heading === "number" && Number.isFinite(heading)) {
           lastHeadingDeg = heading;
         } else if (dMi > 0.01) {
@@ -805,28 +738,21 @@ function startLocationWatch() {
       setNavRotation(lastHeadingDeg);
       setNavVisual(isMoving);
 
-      /* FOLLOW behavior:
-         - If Auto-center ON and not paused, follow user.
-         - If paused, do nothing (user is exploring).
-      */
-      if (autoCenter && !isFollowPaused()) {
-        const desiredZoom = Math.max(map.getZoom(), AUTO_CENTER_MIN_ZOOM);
+      const desiredZoom = Math.max(map.getZoom(), AUTO_CENTER_MIN_ZOOM);
 
-        if (!gpsFirstFixDone) {
-          gpsFirstFixDone = true;
-          suppressAutoDisableFor(1200, () => map.setView(userLatLng, desiredZoom, { animate: true }));
+      // First fix: jump to you
+      if (!gpsFirstFixDone) {
+        gpsFirstFixDone = true;
+        suppressAutoDisableFor(1200, () => map.setView(userLatLng, desiredZoom, { animate: true }));
+      } else if (autoCenter) {
+        // Keep following you (pan), and bring zoom back if you are too zoomed out
+        if (map.getZoom() < AUTO_CENTER_MIN_ZOOM) {
+          suppressAutoDisableFor(900, () => map.setView(userLatLng, desiredZoom, { animate: true }));
         } else {
-          /* If user is zoomed out, bring them back to minimum follow zoom;
-             otherwise pan smoothly. */
-          if (map.getZoom() < AUTO_CENTER_MIN_ZOOM) {
-            suppressAutoDisableFor(900, () => map.setView(userLatLng, desiredZoom, { animate: true }));
-          } else {
-            suppressAutoDisableFor(700, () => map.panTo(userLatLng, { animate: true }));
-          }
+          suppressAutoDisableFor(700, () => map.panTo(userLatLng, { animate: true }));
         }
       }
 
-      /* Recompute recommendation when location changes */
       if (currentFrame) updateRecommendation(currentFrame);
     },
     (err) => {
@@ -841,81 +767,20 @@ function startLocationWatch() {
     }
   );
 
-  /* Every ~1s update arrow visual state for “recently moved” */
+  // Keep moving pulse accurate even if Safari pauses heading updates
   setInterval(() => {
     const now = Date.now();
-    const recentlyMoved = lastMoveTs && now - lastMoveTs < 5000;
+    const recentlyMoved = lastMoveTs && (now - lastMoveTs) < 5000;
     setNavVisual(!!recentlyMoved);
   }, 1200);
 }
 
 /* =========================================================
-   LIVE MODE: Keep slider + map aligned to NYC “now”
-   =========================================================
-   IMPORTANT: Live mode does NOT stop you from exploring.
-   - When you touch/drag slider: we pause auto-advance
-   - When you drag/zoom map: we pause auto-follow (different pause)
+   AUTO-UPDATE (the main thing you asked for)
+   - Keeps map alive on Safari without manual refresh
    ========================================================= */
-let lastAutoIdx = null;
-let pauseLiveUntil = 0;
 
-function pauseLiveFor(ms) {
-  pauseLiveUntil = Date.now() + ms;
-}
-function liveIsPaused() {
-  return Date.now() < pauseLiveUntil;
-}
-
-/* Pause Live auto-advance while user touches slider */
-if (slider) {
-  const pause = () => pauseLiveFor(15_000);
-  slider.addEventListener("pointerdown", pause);
-  slider.addEventListener("touchstart", pause, { passive: true });
-  slider.addEventListener("mousedown", pause);
-}
-
-/* Jump slider to nearest “now” frame if not paused */
-async function jumpToNowFrameIfNeeded() {
-  if (!LIVE_MODE) return;
-  if (!timeline || !timeline.length) return;
-  if (liveIsPaused()) return;
-
-  const nowMinWeek = getNowNYCMinuteOfWeekRounded();
-  const idx = pickClosestIndex(minutesOfWeek, nowMinWeek);
-
-  if (lastAutoIdx === idx) return;
-
-  slider.value = String(idx);
-  lastAutoIdx = idx;
-
-  await loadFrame(idx);
-}
-
-/* Refresh timeline periodically (useful if backend regenerated frames) */
-async function refreshTimelineAndMaybeJump() {
-  try {
-    const t = await fetchJSON(`${RAILWAY_BASE}/timeline`);
-    timeline = Array.isArray(t) ? t : t.timeline || [];
-    if (!timeline.length) return;
-
-    minutesOfWeek = timeline.map(minuteOfWeekFromIso);
-
-    slider.min = "0";
-    slider.max = String(timeline.length - 1);
-    slider.step = "1";
-
-    await jumpToNowFrameIfNeeded();
-  } catch (e) {
-    console.warn("Timeline refresh failed:", e);
-  }
-}
-
-/* Live tick: every 20s snap to NYC now (unless slider paused) */
-setInterval(() => {
-  jumpToNowFrameIfNeeded().catch((e) => console.warn("Auto-advance failed:", e));
-}, LIVE_TICK_MS);
-
-/* Auto-refresh selected frame every 5 minutes (colors/polygons update) */
+// Refresh current slider frame every 5 minutes (re-fetches colors/tooltips)
 async function refreshCurrentFrame() {
   try {
     const idx = Number(slider.value || "0");
@@ -926,21 +791,35 @@ async function refreshCurrentFrame() {
 }
 setInterval(refreshCurrentFrame, REFRESH_MS);
 
-/* Refresh timeline every 30 minutes */
-setInterval(() => {
-  refreshTimelineAndMaybeJump().catch((e) => console.warn("Timeline+frame refresh failed:", e));
-}, TIMELINE_REFRESH_MS);
+// Every minute: if NYC moved into a NEW 20-min bucket, auto-advance slider + load new frame
+async function tickNYCClockAndAdvanceIfNeeded() {
+  try {
+    // Don't fight the user if they just touched slider
+    if (Date.now() - lastUserSliderTs < USER_SLIDER_GRACE_MS) return;
 
-/* Catch up when returning to the tab/app */
-document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) {
-    refreshTimelineAndMaybeJump().catch(() => {});
-    refreshCurrentFrame().catch(() => {});
+    if (!timeline.length || !minutesOfWeek.length) return;
+
+    const nowMinWeek = getNowNYCMinuteOfWeekRounded();
+    const bestIdx = pickClosestIndex(minutesOfWeek, nowMinWeek);
+
+    const curIdx = Number(slider.value || "0");
+    if (bestIdx === curIdx) return; // still same 20-min slot
+
+    // Move slider to "now" and load that frame
+    slider.value = String(bestIdx);
+    await loadFrame(bestIdx);
+  } catch (e) {
+    console.warn("NYC clock tick failed:", e);
   }
-});
-window.addEventListener("focus", () => {
-  refreshTimelineAndMaybeJump().catch(() => {});
-  refreshCurrentFrame().catch(() => {});
+}
+setInterval(tickNYCClockAndAdvanceIfNeeded, NYC_CLOCK_TICK_MS);
+
+// When tab becomes visible again (Safari), refresh immediately
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    refreshCurrentFrame().catch(() => {});
+    tickNYCClockAndAdvanceIfNeeded().catch(() => {});
+  }
 });
 
 /* =========================================================
