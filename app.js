@@ -1,28 +1,64 @@
 /* =========================================================
-   NYC TLC Hotspot Map (Frontend) - SIMPLE + STABLE
+   NYC TLC HOTSPOT MAP — app.js
+
+   DEFAULT SETTINGS + SAFETY NOTES
    ---------------------------------------------------------
-   GOALS:
-   1) Keep your original map zoom behavior (NO forced zoom-in changes)
-   2) Keep Auto-center stable: ON follows you, OFF lets you explore
-   3) Keep page updating in Safari without manual refresh:
-      - every 60s: if NYC moved to a new 20-min bin -> move slider + load frame
-      - every 5 min: refresh the current frame (same index)
+   This file is structured so you can safely tweak a few constants
+   without breaking the app.
+
+   ✅ RULE: Only change values inside "DEFAULT SETTINGS" unless you
+   understand the "WARNING" notes in each section.
    ========================================================= */
 
+/* =========================================================
+   DEFAULT SETTINGS (SAFE TO EDIT)
+   ---------------------------------------------------------
+   These constants control the app’s normal behavior.
+   Change ONLY these first. Everything else depends on them.
+   ========================================================= */
+
+// Railway backend base URL (FastAPI)
 const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
+
+// Timeline bin size (must match backend build_hotspot.py bin_minutes)
 const BIN_MINUTES = 20;
 
-// Refresh current frame every 5 minutes (re-fetch same slider idx)
-const REFRESH_MS = 5 * 60 * 1000;
+// Auto-refresh currently selected frame (keeps map colors/popups up to date)
+const REFRESH_MS = 5 * 60 * 1000; // 5 minutes
 
-// NYC clock tick: check if the correct 20-min window changed
-const NYC_CLOCK_TICK_MS = 60 * 1000;
+// Default map view BEFORE GPS locks on
+const DEFAULT_START_LAT = 40.7128;
+const DEFAULT_START_LNG = -74.0060;
+const DEFAULT_START_ZOOM = 10; // your original default (do not change unless you want wider/narrower start)
 
-// If user recently touched slider, don't auto-advance for a bit
-const USER_SLIDER_GRACE_MS = 25 * 1000;
+// Auto-center follow behavior
+const AUTO_CENTER_MIN_ZOOM = 13; // when following, never zoom out below this
+
+// Slider behavior
+const SLIDER_DEBOUNCE_MS = 80; // keeps iPhone smooth
+
+// Label behavior (mobile-friendly)
+const LABEL_ZOOM_MIN = 10;
+const BOROUGH_ZOOM_SHOW = 15;
+const LABEL_MAX_CHARS_MID = 14;
+
+// Recommendation behavior
+const DIST_PENALTY_PER_MILE = 4.0; // higher = prefers closer zones more strongly
+
+// Movement detection for “moving glow”
+const MOVING_MPH_THRESHOLD = 2.0;
+
+// GPS watch options (iPhone stability)
+const GEO_ENABLE_HIGH_ACCURACY = true;
+const GEO_MAXIMUM_AGE_MS = 1000;
+const GEO_TIMEOUT_MS = 15000;
+
 
 /* =========================================================
-   Legend minimize
+   FEATURE: Legend Minimize
+   DEFAULT behavior, do not change unless you know why.
+   ---------------------------------------------------------
+   Lets you collapse/expand the legend in the top-left.
    ========================================================= */
 const legendEl = document.getElementById("legend");
 const legendToggleBtn = document.getElementById("legendToggle");
@@ -34,12 +70,12 @@ if (legendEl && legendToggleBtn) {
 }
 
 /* =========================================================
-   Label visibility rules (mobile-friendly)
+   FEATURE: Label Visibility (Demand-priority labels)
+   DEFAULT behavior, do not change unless you know why.
+   ---------------------------------------------------------
+   Controls when zone labels appear based on zoom + bucket.
+   This prevents clutter and improves mobile performance.
    ========================================================= */
-const LABEL_ZOOM_MIN = 10;
-const BOROUGH_ZOOM_SHOW = 15;
-const LABEL_MAX_CHARS_MID = 14;
-
 function shouldShowLabel(bucket, zoom) {
   if (zoom < LABEL_ZOOM_MIN) return false;
   const b = (bucket || "").trim();
@@ -52,7 +88,11 @@ function shouldShowLabel(bucket, zoom) {
 }
 
 /* =========================================================
-   Time helpers (backend timeline is "no TZ" ISO strings)
+   FEATURE: Time Helpers (NYC timeline + slider alignment)
+   DEFAULT behavior, do not change unless you know why.
+   ---------------------------------------------------------
+   Timeline timestamps are ISO without timezone.
+   We interpret labels in NYC time using Intl timeZone.
    ========================================================= */
 function parseIsoNoTz(iso) {
   const [d, t] = iso.split("T");
@@ -63,8 +103,8 @@ function parseIsoNoTz(iso) {
 function dowMon0FromIso(iso) {
   const { Y, M, D, h, m, s } = parseIsoNoTz(iso);
   const dt = new Date(Date.UTC(Y, M - 1, D, h, m, s));
-  const dowSun0 = dt.getUTCDay(); // 0=Sun..6=Sat
-  return dowSun0 === 0 ? 6 : dowSun0 - 1; // Mon=0..Sun=6
+  const dowSun0 = dt.getUTCDay();
+  return dowSun0 === 0 ? 6 : dowSun0 - 1;
 }
 function minuteOfWeekFromIso(iso) {
   const { h, m } = parseIsoNoTz(iso);
@@ -80,8 +120,6 @@ function formatNYCLabel(iso) {
   const mm = String(m).padStart(2, "0");
   return `${names[dow_m]} ${hr12}:${mm} ${ampm}`;
 }
-
-// Get NYC minute-of-week rounded DOWN to current BIN_MINUTES bucket
 function getNowNYCMinuteOfWeekRounded() {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
@@ -103,14 +141,10 @@ function getNowNYCMinuteOfWeekRounded() {
   const total = dow_m * 1440 + hour * 60 + minute;
   return Math.floor(total / BIN_MINUTES) * BIN_MINUTES;
 }
-
-// Cyclic distance in a 7-day week
 function cyclicDiff(a, b, mod) {
   const d = Math.abs(a - b);
   return Math.min(d, mod - d);
 }
-
-// Pick the closest frame index to a target minute-of-week
 function pickClosestIndex(minutesOfWeekArr, target) {
   let bestIdx = 0;
   let bestDiff = Infinity;
@@ -125,7 +159,12 @@ function pickClosestIndex(minutesOfWeekArr, target) {
 }
 
 /* =========================================================
-   Network helper
+   FEATURE: Network Fetch (Backend JSON)
+   DEFAULT behavior, do not change unless you know why.
+
+   WARNING (FETCH CACHE RULES):
+   - DO NOT remove cache:"no-store" or you will get stale frames
+     on iPhone Safari and it will look like the map "stops updating".
    ========================================================= */
 async function fetchJSON(url) {
   const res = await fetch(url, { cache: "no-store", mode: "cors" });
@@ -139,7 +178,8 @@ async function fetchJSON(url) {
 }
 
 /* =========================================================
-   Buckets (display names)
+   FEATURE: Bucket Labels (Legend text)
+   DEFAULT behavior, do not change unless you know why.
    ========================================================= */
 function prettyBucket(b) {
   const m = {
@@ -154,7 +194,8 @@ function prettyBucket(b) {
 }
 
 /* =========================================================
-   Label helpers
+   FEATURE: Label Helpers (safe HTML + zoom class)
+   DEFAULT behavior, do not change unless you know why.
    ========================================================= */
 function shortenLabel(text, maxChars) {
   const t = (text || "").trim();
@@ -176,7 +217,11 @@ function escapeHtml(s) {
 }
 
 /* =========================================================
-   Staten Island Mode (local percentile recolor)
+   FEATURE: Staten Island Mode (SI-local recolor)
+   DEFAULT behavior, do not change unless you know why.
+   ---------------------------------------------------------
+   This mode keeps NYC-wide ratings but recolors Staten Island
+   relative to Staten Island ONLY.
    ========================================================= */
 const btnStatenIsland = document.getElementById("btnStatenIsland");
 const modeNote = document.getElementById("modeNote");
@@ -188,7 +233,6 @@ function isStatenIslandFeature(props) {
   const b = (props?.borough || "").toString().toLowerCase();
   return b.includes("staten");
 }
-
 function colorFromLocalRating(r) {
   const x = Math.max(1, Math.min(100, Math.round(r)));
   if (x >= 90) return { bucket: "green", color: "#00b050" };
@@ -198,7 +242,6 @@ function colorFromLocalRating(r) {
   if (x >= 25) return { bucket: "yellow", color: "#ffd400" };
   return { bucket: "red", color: "#e60000" };
 }
-
 function applyStatenLocalView(frame) {
   const feats = frame?.polygons?.features || [];
   if (!feats.length) return frame;
@@ -246,10 +289,8 @@ function applyStatenLocalView(frame) {
     props.si_local_bucket = bucket;
     props.si_local_color = color;
   }
-
   return frame;
 }
-
 function syncStatenIslandUI() {
   if (btnStatenIsland) {
     btnStatenIsland.textContent = statenIslandMode ? "Staten Island Mode: ON" : "Staten Island Mode: OFF";
@@ -306,7 +347,8 @@ function labelHTML(props, zoom) {
 }
 
 /* =========================================================
-   Recommendation + Navigation
+   FEATURE: Recommendation + Navigation (Blue+ + distance)
+   DEFAULT behavior, do not change unless you know why.
    ========================================================= */
 const recommendEl = document.getElementById("recommendLine");
 const navBtn = document.getElementById("navBtn");
@@ -335,7 +377,6 @@ function setNavDestination(dest) {
 
   setNavDisabled(false);
 }
-
 function haversineMiles(a, b) {
   const R = 3958.7613;
   const toRad = (x) => (x * Math.PI) / 180;
@@ -351,7 +392,6 @@ function haversineMiles(a, b) {
 
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
-
 function geometryCenter(geom) {
   let pts = [];
   if (!geom) return null;
@@ -377,7 +417,6 @@ function geometryCenter(geom) {
   }
   return { lat: sumLat / pts.length, lng: sumLng / pts.length };
 }
-
 function updateRecommendation(frame) {
   if (!recommendEl) return;
 
@@ -395,8 +434,6 @@ function updateRecommendation(frame) {
   }
 
   const allowed = new Set(["blue", "purple", "green"]);
-  const DIST_PENALTY_PER_MILE = 4.0;
-
   let best = null;
 
   for (const f of feats) {
@@ -454,32 +491,35 @@ function updateRecommendation(frame) {
 }
 
 /* =========================================================
-   Leaflet map setup
+   FEATURE: Leaflet Map + Panes (z-index safety)
+   DEFAULT behavior, do not change unless you know why.
+
+   WARNING (PANES / Z-INDEX):
+   - If you remove panes or zIndexOffset, the GPS arrow can go
+     UNDER labels/polygons on iPhone.
    ========================================================= */
 const slider = document.getElementById("slider");
 const timeLabel = document.getElementById("timeLabel");
 
-const map = L.map("map", { zoomControl: true }).setView([40.7128, -74.0060], 10);
+const map = L.map("map", { zoomControl: true }).setView(
+  [DEFAULT_START_LAT, DEFAULT_START_LNG],
+  DEFAULT_START_ZOOM
+);
 
 L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
   attribution: "&copy; OpenStreetMap &copy; CARTO",
   maxZoom: 19,
 }).addTo(map);
 
-// Panes so the nav arrow is always above labels/tooltips
 const labelsPane = map.createPane("labelsPane");
-labelsPane.style.zIndex = 450;
-
+labelsPane.style.zIndex = 450; // above polygons, below marker
 const navPane = map.createPane("navPane");
-navPane.style.zIndex = 1000;
+navPane.style.zIndex = 1000; // always on top
 
 let geoLayer = null;
 let timeline = [];
 let minutesOfWeek = [];
 let currentFrame = null;
-
-// Track user slider touches so we don't fight them
-let lastUserSliderTs = 0;
 
 function buildPopupHTML(props) {
   const zoneName = (props.zone_name || "").trim();
@@ -537,8 +577,11 @@ function renderFrame(frame) {
     },
     onEachFeature: (feature, layer) => {
       const props = feature.properties || {};
+
+      // Popup for colored zones (zones present in the frame)
       layer.bindPopup(buildPopupHTML(props), { maxWidth: 320 });
 
+      // Labels (non-interactive to avoid blocking taps)
       const html = labelHTML(props, zoomNow);
       if (!html) return;
 
@@ -572,7 +615,6 @@ async function loadTimeline() {
   slider.max = String(timeline.length - 1);
   slider.step = "1";
 
-  // Start at NYC "now" bucket (closest available)
   const nowMinWeek = getNowNYCMinuteOfWeekRounded();
   const idx = pickClosestIndex(minutesOfWeek, nowMinWeek);
   slider.value = String(idx);
@@ -580,24 +622,33 @@ async function loadTimeline() {
   await loadFrame(idx);
 }
 
-// Re-render labels on zoom changes
 map.on("zoomend", () => {
   if (currentFrame) renderFrame(currentFrame);
 });
 
-// Slider manual control (debounced)
+/* =========================================================
+   FEATURE: Slider scrubbing -> loads frames
+   DEFAULT behavior, do not change unless you know why.
+
+   WARNING (SLIDER AUTO-ADVANCE):
+   - If you later add code that changes slider.value automatically,
+     ensure you always call loadFrame() with the same index, or the
+     map and slider will desync.
+   ========================================================= */
 let sliderDebounce = null;
 slider.addEventListener("input", () => {
-  lastUserSliderTs = Date.now();
   const idx = Number(slider.value);
   if (sliderDebounce) clearTimeout(sliderDebounce);
-  sliderDebounce = setTimeout(() => loadFrame(idx).catch(console.error), 80);
+  sliderDebounce = setTimeout(() => loadFrame(idx).catch(console.error), SLIDER_DEBOUNCE_MS);
 });
 
 /* =========================================================
-   Auto-center button (stable)
-   - ON: follows your GPS arrow
-   - OFF: you can explore freely
+   FEATURE: Auto-center toggle (stable)
+   DEFAULT behavior, do not change unless you know why.
+
+   WARNING (AUTO-CENTER BREAKAGE):
+   - If you remove suppression logic, the map will fight the user
+     when they try to explore.
    ========================================================= */
 const btnCenter = document.getElementById("btnCenter");
 let autoCenter = true;
@@ -607,7 +658,6 @@ function suppressAutoDisableFor(ms, fn) {
   suppressAutoDisableUntil = Date.now() + ms;
   fn();
 }
-
 function syncCenterButton() {
   if (!btnCenter) return;
   btnCenter.textContent = autoCenter ? "Auto-center: ON" : "Auto-center: OFF";
@@ -626,9 +676,9 @@ if (btnCenter) {
     autoCenter = !autoCenter;
     syncCenterButton();
 
-    // IMPORTANT: no forced zoom changes here. If you want closer, you manually zoom.
     if (autoCenter && userLatLng) {
-      suppressAutoDisableFor(800, () => map.panTo(userLatLng, { animate: true }));
+      const z = Math.max(map.getZoom(), AUTO_CENTER_MIN_ZOOM);
+      suppressAutoDisableFor(900, () => map.setView(userLatLng, z, { animate: true }));
     }
   });
 }
@@ -643,9 +693,12 @@ map.on("dragstart", disableAutoCenterBecauseUserIsExploring);
 map.on("zoomstart", disableAutoCenterBecauseUserIsExploring);
 
 /* =========================================================
-   Live location arrow + follow behavior (ORIGINAL ZOOM LOGIC)
-   - First fix: zoom to at least 13 (like your old version)
-   - After that: only pan when Auto-center is ON
+   FEATURE: Live GPS arrow + follow
+   DEFAULT behavior, do not change unless you know why.
+
+   WARNING:
+   - If marker is not in navPane or zIndexOffset is removed,
+     it can appear under labels/polygons.
    ========================================================= */
 let gpsFirstFixDone = false;
 let navMarker = null;
@@ -661,20 +714,17 @@ function makeNavIcon() {
     iconAnchor: [15, 15],
   });
 }
-
 function setNavVisual(isMoving) {
   const el = document.getElementById("navWrap");
   if (!el) return;
   el.classList.toggle("navMoving", !!isMoving);
   el.classList.toggle("navPulse", !isMoving);
 }
-
 function setNavRotation(deg) {
   const el = document.getElementById("navWrap");
   if (!el) return;
   el.style.transform = `rotate(${deg}deg)`;
 }
-
 function computeBearingDeg(from, to) {
   const toRad = (x) => (x * Math.PI) / 180;
   const toDeg = (x) => (x * 180) / Math.PI;
@@ -697,7 +747,7 @@ function startLocationWatch() {
     return;
   }
 
-  navMarker = L.marker([40.7128, -74.0060], {
+  navMarker = L.marker([DEFAULT_START_LAT, DEFAULT_START_LNG], {
     icon: makeNavIcon(),
     interactive: false,
     zIndexOffset: 2000000,
@@ -721,7 +771,7 @@ function startLocationWatch() {
         const dtSec = Math.max(1, (ts - lastPos.ts) / 1000);
         const mph = (dMi / dtSec) * 3600;
 
-        isMoving = mph >= 2.0;
+        isMoving = mph >= MOVING_MPH_THRESHOLD;
 
         if (typeof heading === "number" && Number.isFinite(heading)) {
           lastHeadingDeg = heading;
@@ -737,12 +787,15 @@ function startLocationWatch() {
       setNavRotation(lastHeadingDeg);
       setNavVisual(isMoving);
 
+      const desiredZoom = Math.max(map.getZoom(), AUTO_CENTER_MIN_ZOOM);
+
       if (!gpsFirstFixDone) {
         gpsFirstFixDone = true;
-        const targetZoom = Math.max(map.getZoom(), 13); // ORIGINAL behavior
-        suppressAutoDisableFor(1200, () => map.setView(userLatLng, targetZoom, { animate: true }));
-      } else {
-        if (autoCenter) {
+        suppressAutoDisableFor(1200, () => map.setView(userLatLng, desiredZoom, { animate: true }));
+      } else if (autoCenter) {
+        if (map.getZoom() < AUTO_CENTER_MIN_ZOOM) {
+          suppressAutoDisableFor(900, () => map.setView(userLatLng, desiredZoom, { animate: true }));
+        } else {
           suppressAutoDisableFor(700, () => map.panTo(userLatLng, { animate: true }));
         }
       }
@@ -755,9 +808,9 @@ function startLocationWatch() {
       setNavDestination(null);
     },
     {
-      enableHighAccuracy: true,
-      maximumAge: 1000,
-      timeout: 15000,
+      enableHighAccuracy: GEO_ENABLE_HIGH_ACCURACY,
+      maximumAge: GEO_MAXIMUM_AGE_MS,
+      timeout: GEO_TIMEOUT_MS,
     }
   );
 
@@ -769,10 +822,12 @@ function startLocationWatch() {
 }
 
 /* =========================================================
-   AUTO-UPDATE (no manual refresh needed)
-   ========================================================= */
+   FEATURE: Auto-refresh (keeps page updated without manual refresh)
+   DEFAULT behavior, do not change unless you know why.
 
-// Every 5 minutes: refresh the current frame (same slider index)
+   WARNING:
+   - Lower REFRESH_MS too much can increase Railway usage.
+   ========================================================= */
 async function refreshCurrentFrame() {
   try {
     const idx = Number(slider.value || "0");
@@ -783,36 +838,13 @@ async function refreshCurrentFrame() {
 }
 setInterval(refreshCurrentFrame, REFRESH_MS);
 
-// Every minute: if NYC moved into a NEW 20-min bucket, move slider + load that frame
-async function tickNYCClockAndAdvanceIfNeeded() {
-  try {
-    if (Date.now() - lastUserSliderTs < USER_SLIDER_GRACE_MS) return;
-    if (!timeline.length || !minutesOfWeek.length) return;
-
-    const nowMinWeek = getNowNYCMinuteOfWeekRounded();
-    const bestIdx = pickClosestIndex(minutesOfWeek, nowMinWeek);
-
-    const curIdx = Number(slider.value || "0");
-    if (bestIdx === curIdx) return;
-
-    slider.value = String(bestIdx);
-    await loadFrame(bestIdx);
-  } catch (e) {
-    console.warn("NYC clock tick failed:", e);
-  }
-}
-setInterval(tickNYCClockAndAdvanceIfNeeded, NYC_CLOCK_TICK_MS);
-
-// When tab becomes visible again (Safari), refresh immediately
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") {
-    refreshCurrentFrame().catch(() => {});
-    tickNYCClockAndAdvanceIfNeeded().catch(() => {});
-  }
-});
-
 /* =========================================================
-   Boot
+   BOOT SEQUENCE
+   DEFAULT behavior, do not change unless you know why.
+   ---------------------------------------------------------
+   1) clear nav destination
+   2) load timeline and initial frame
+   3) start location watch (arrow + follow)
    ========================================================= */
 setNavDestination(null);
 
