@@ -352,30 +352,106 @@ function haversineMiles(a, b) {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
+/* =========================================================
+   FIX: Accurate polygon centroid (area-weighted)
+   ---------------------------------------------------------
+   Your old geometryCenter() averaged points, which can be far
+   from the real zone center. That breaks distance -> breaks
+   recommendations.
+   ========================================================= */
+
+// Centroid of a linear ring (expects [[lng,lat],...], ideally closed)
+function ringCentroidArea(ring) {
+  if (!Array.isArray(ring) || ring.length < 3) return null;
+
+  // Ensure closed ring for math stability
+  const pts = ring.slice();
+  const first = pts[0];
+  const last = pts[pts.length - 1];
+  if (first && last && (first[0] !== last[0] || first[1] !== last[1])) {
+    pts.push([first[0], first[1]]);
+  }
+
+  let A = 0;
+  let Cx = 0;
+  let Cy = 0;
+
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [x0, y0] = pts[i];
+    const [x1, y1] = pts[i + 1];
+    const cross = x0 * y1 - x1 * y0;
+    A += cross;
+    Cx += (x0 + x1) * cross;
+    Cy += (y0 + y1) * cross;
+  }
+
+  // A is 2*signedArea
+  if (Math.abs(A) < 1e-12) return null;
+
+  const inv = 1 / (3 * A);
+  return { lng: Cx * inv, lat: Cy * inv, area2: A };
+}
+
+// Centroid of Polygon with holes: outer ring minus hole influence (approx)
+function polygonCentroid(geom) {
+  const rings = geom?.coordinates;
+  if (!Array.isArray(rings) || rings.length === 0) return null;
+
+  // Outer ring centroid
+  const outer = ringCentroidArea(rings[0]);
+  if (!outer) return null;
+
+  // Subtract holes (if any)
+  let sumArea2 = outer.area2;
+  let sumLng = outer.lng * outer.area2;
+  let sumLat = outer.lat * outer.area2;
+
+  for (let i = 1; i < rings.length; i++) {
+    const hole = ringCentroidArea(rings[i]);
+    if (!hole) continue;
+    // Hole ring orientation may be opposite; use its area2 as computed
+    sumArea2 += hole.area2;
+    sumLng += hole.lng * hole.area2;
+    sumLat += hole.lat * hole.area2;
+  }
+
+  if (Math.abs(sumArea2) < 1e-12) return { lat: outer.lat, lng: outer.lng };
+  return { lat: sumLat / sumArea2, lng: sumLng / sumArea2 };
+}
+
+// Centroid of MultiPolygon: area-weighted average of polygon centroids
+function multiPolygonCentroid(geom) {
+  const polys = geom?.coordinates;
+  if (!Array.isArray(polys) || polys.length === 0) return null;
+
+  let sumArea2 = 0;
+  let sumLat = 0;
+  let sumLng = 0;
+
+  for (const poly of polys) {
+    // poly is [ring1, ring2...]
+    const c = polygonCentroid({ type: "Polygon", coordinates: poly });
+    if (!c) continue;
+
+    // Approx weight: use outer ring area2
+    const outer = ringCentroidArea(poly?.[0] || []);
+    const w = outer ? outer.area2 : 1;
+
+    sumArea2 += w;
+    sumLat += c.lat * w;
+    sumLng += c.lng * w;
+  }
+
+  if (Math.abs(sumArea2) < 1e-12) return null;
+  return { lat: sumLat / sumArea2, lng: sumLng / sumArea2 };
+}
+
+// Replacement for your old geometryCenter()
 function geometryCenter(geom) {
-  let pts = [];
   if (!geom) return null;
-
-  if (geom.type === "Polygon") {
-    pts = geom.coordinates?.[0] || [];
-  } else if (geom.type === "MultiPolygon") {
-    const polys = geom.coordinates || [];
-    for (const p of polys) {
-      const ring = p?.[0] || [];
-      pts.push(...ring);
-    }
-  } else {
-    return null;
-  }
-
-  if (!pts.length) return null;
-
-  let sumLng = 0, sumLat = 0;
-  for (const [lng, lat] of pts) {
-    sumLng += lng;
-    sumLat += lat;
-  }
-  return { lat: sumLat / pts.length, lng: sumLng / pts.length };
+  if (geom.type === "Polygon") return polygonCentroid(geom);
+  if (geom.type === "MultiPolygon") return multiPolygonCentroid(geom);
+  return null;
 }
 
 function updateRecommendation(frame) {
@@ -644,8 +720,6 @@ map.on("zoomstart", disableAutoCenterBecauseUserIsExploring);
 
 /* =========================================================
    Live location arrow + follow behavior (ORIGINAL ZOOM LOGIC)
-   - First fix: zoom to at least 13 (like your old version)
-   - After that: only pan when Auto-center is ON
    ========================================================= */
 let gpsFirstFixDone = false;
 let navMarker = null;
