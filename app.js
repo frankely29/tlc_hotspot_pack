@@ -29,13 +29,13 @@ const REFRESH_MS = 5 * 60 * 1000; // 5 minutes
 // Default map view BEFORE GPS locks on
 const DEFAULT_START_LAT = 40.7128;
 const DEFAULT_START_LNG = -74.0060;
-const DEFAULT_START_ZOOM = 10; // your original default (do not change unless you want wider/narrower start)
+const DEFAULT_START_ZOOM = 10; // DEFAULT: original start zoom (do not change unless you want wider/narrower start)
 
 // Auto-center follow behavior
-const AUTO_CENTER_MIN_ZOOM = 13; // when following, never zoom out below this
+const AUTO_CENTER_MIN_ZOOM = 13; // DEFAULT: when following, never zoom out below this
 
 // Slider behavior
-const SLIDER_DEBOUNCE_MS = 80; // keeps iPhone smooth
+const SLIDER_DEBOUNCE_MS = 80; // DEFAULT: keeps iPhone smooth
 
 // Label behavior (mobile-friendly)
 const LABEL_ZOOM_MIN = 10;
@@ -52,7 +52,6 @@ const MOVING_MPH_THRESHOLD = 2.0;
 const GEO_ENABLE_HIGH_ACCURACY = true;
 const GEO_MAXIMUM_AGE_MS = 1000;
 const GEO_TIMEOUT_MS = 15000;
-
 
 /* =========================================================
    FEATURE: Legend Minimize
@@ -825,9 +824,17 @@ function startLocationWatch() {
    FEATURE: Auto-refresh (keeps page updated without manual refresh)
    DEFAULT behavior, do not change unless you know why.
 
-   WARNING:
+   WARNING (iPhone Safari timer throttling):
+   - Safari can pause setInterval when the screen dims/locks or when
+     you switch apps. This block fixes the "stopped auto refreshing"
+     problem by:
+       1) Running the normal interval while visible
+       2) Refreshing immediately when you return (visibility/focus)
+       3) Re-arming the interval so it doesn't silently die
    - Lower REFRESH_MS too much can increase Railway usage.
    ========================================================= */
+let refreshTimerId = null;
+
 async function refreshCurrentFrame() {
   try {
     const idx = Number(slider.value || "0");
@@ -836,7 +843,33 @@ async function refreshCurrentFrame() {
     console.warn("Auto-refresh failed:", e);
   }
 }
-setInterval(refreshCurrentFrame, REFRESH_MS);
+
+function startAutoRefreshTimer() {
+  if (refreshTimerId) clearInterval(refreshTimerId);
+  refreshTimerId = setInterval(refreshCurrentFrame, REFRESH_MS);
+}
+
+function stopAutoRefreshTimer() {
+  if (refreshTimerId) clearInterval(refreshTimerId);
+  refreshTimerId = null;
+}
+
+// When you come back to the tab, refresh immediately + restart timer (Safari safe)
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    startAutoRefreshTimer();
+    refreshCurrentFrame();
+  } else {
+    // Optional: stop while hidden to reduce background wakeups / battery
+    stopAutoRefreshTimer();
+  }
+});
+
+// Some Safari cases fire focus without visibilitychange
+window.addEventListener("focus", () => {
+  startAutoRefreshTimer();
+  refreshCurrentFrame();
+});
 
 /* =========================================================
    BOOT SEQUENCE
@@ -845,6 +878,7 @@ setInterval(refreshCurrentFrame, REFRESH_MS);
    1) clear nav destination
    2) load timeline and initial frame
    3) start location watch (arrow + follow)
+   4) start auto-refresh timer (Safari-safe)
    ========================================================= */
 setNavDestination(null);
 
@@ -854,3 +888,7 @@ loadTimeline().catch((err) => {
 });
 
 startLocationWatch();
+
+// Start once at boot
+startAutoRefreshTimer();
+refreshCurrentFrame();
