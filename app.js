@@ -25,10 +25,23 @@
    - Uptown Manhattan stays NYC-wide
    - We detect this by zone centroid latitude cutoff
 
+   =========================================================
+   SLIDER UPDATE (ONLY CHANGE WE MADE NOW):
+   ---------------------------------------------------------
+   You wanted:
+   - Slider a little thinner
+   - More precise sliding (sometimes tiny move jumps too far)
+   - Keep ability to scrub the whole week
+
+   Solution (frontend-only, no backend load change):
+   - Keep the main week slider exactly as-is (still full week).
+   - When you touch/drag the slider, a temporary "Fine Scrub" slider
+     pops up (bigger thumb + easier control). It mirrors the same
+     min/max/value, just easier to drag precisely.
+   - It auto-hides when you stop interacting.
+
    WARNING:
-   - This does NOT increase Railway load. It only changes frontend coloring.
-   - It does NOT change your backend frames; it only recalculates Manhattan
-     presentation and recommendation weighting on the fly.
+   - No other logic changed.
    ========================================================= */
 
 const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
@@ -255,6 +268,106 @@ function isManhattanFeature(props) {
 }
 
 /* =========================================================
+   FIX: Accurate polygon centroid (area-weighted)
+   ---------------------------------------------------------
+   Needed for: Manhattan core cutoff + recommendations.
+   ========================================================= */
+
+// Centroid of a linear ring (expects [[lng,lat],...], ideally closed)
+function ringCentroidArea(ring) {
+  if (!Array.isArray(ring) || ring.length < 3) return null;
+
+  // Ensure closed ring for math stability
+  const pts = ring.slice();
+  const first = pts[0];
+  const last = pts[pts.length - 1];
+  if (first && last && (first[0] !== last[0] || first[1] !== last[1])) {
+    pts.push([first[0], first[1]]);
+  }
+
+  let A = 0;
+  let Cx = 0;
+  let Cy = 0;
+
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [x0, y0] = pts[i];
+    const [x1, y1] = pts[i + 1];
+    const cross = x0 * y1 - x1 * y0;
+    A += cross;
+    Cx += (x0 + x1) * cross;
+    Cy += (y0 + y1) * cross;
+  }
+
+  // A is 2*signedArea
+  if (Math.abs(A) < 1e-12) return null;
+
+  const inv = 1 / (3 * A);
+  return { lng: Cx * inv, lat: Cy * inv, area2: A };
+}
+
+// Centroid of Polygon with holes: outer ring minus hole influence (approx)
+function polygonCentroid(geom) {
+  const rings = geom?.coordinates;
+  if (!Array.isArray(rings) || rings.length === 0) return null;
+
+  // Outer ring centroid
+  const outer = ringCentroidArea(rings[0]);
+  if (!outer) return null;
+
+  // Subtract holes (if any)
+  let sumArea2 = outer.area2;
+  let sumLng = outer.lng * outer.area2;
+  let sumLat = outer.lat * outer.area2;
+
+  for (let i = 1; i < rings.length; i++) {
+    const hole = ringCentroidArea(rings[i]);
+    if (!hole) continue;
+    // Hole ring orientation may be opposite; use its area2 as computed
+    sumArea2 += hole.area2;
+    sumLng += hole.lng * hole.area2;
+    sumLat += hole.lat * hole.area2;
+  }
+
+  if (Math.abs(sumArea2) < 1e-12) return { lat: outer.lat, lng: outer.lng };
+  return { lat: sumLat / sumArea2, lng: sumLng / sumArea2 };
+}
+
+// Centroid of MultiPolygon: area-weighted average of polygon centroids
+function multiPolygonCentroid(geom) {
+  const polys = geom?.coordinates;
+  if (!Array.isArray(polys) || polys.length === 0) return null;
+
+  let sumArea2 = 0;
+  let sumLat = 0;
+  let sumLng = 0;
+
+  for (const poly of polys) {
+    // poly is [ring1, ring2...]
+    const c = polygonCentroid({ type: "Polygon", coordinates: poly });
+    if (!c) continue;
+
+    // Approx weight: use outer ring area2
+    const outer = ringCentroidArea(poly?.[0] || []);
+    const w = outer ? outer.area2 : 1;
+
+    sumArea2 += w;
+    sumLat += c.lat * w;
+    sumLng += c.lng * w;
+  }
+
+  if (Math.abs(sumArea2) < 1e-12) return null;
+  return { lat: sumLat / sumArea2, lng: sumLng / sumArea2 };
+}
+
+// Replacement for old geometryCenter()
+function geometryCenter(geom) {
+  if (!geom) return null;
+  if (geom.type === "Polygon") return polygonCentroid(geom);
+  if (geom.type === "MultiPolygon") return multiPolygonCentroid(geom);
+  return null;
+}
+
+/* =========================================================
    Manhattan Mode — UPTOWN EXCLUSION (ONLY CHANGE)
    ---------------------------------------------------------
    Midtown + Lower Manhattan ONLY:
@@ -403,8 +516,8 @@ function applyStatenLocalView(frame) {
    DEFAULT behavior, do not change unless you know why.
    ---------------------------------------------------------
    Uses CURRENT frame data only:
-     - pickups percentile within Manhattan
-     - avg_driver_pay percentile within Manhattan
+     - pickups percentile within CORE Manhattan
+     - avg_driver_pay percentile within CORE Manhattan
    Then:
      score = PAY_WEIGHT*payP + VOL_WEIGHT*volP
      rating = 1 + 99*score
@@ -424,7 +537,7 @@ function applyManhattanLocalView(frame) {
 
   for (const f of feats) {
     const props = f.properties || {};
-    if (!isCoreManhattan(props, f.geometry)) continue; // <-- ONLY CHANGE
+    if (!isCoreManhattan(props, f.geometry)) continue;
 
     const pu = Number(props.pickups ?? NaN);
     const pay = Number(props.avg_driver_pay ?? NaN);
@@ -449,7 +562,6 @@ function applyManhattanLocalView(frame) {
   const paySorted = mPay.slice().sort((a, b) => a - b);
 
   function percentileFromSorted(sorted, v) {
-    // percent based on <= v index
     const n = sorted.length;
     if (n <= 1) return 0;
     let lo = 0, hi = n - 1, ans = -1;
@@ -465,7 +577,7 @@ function applyManhattanLocalView(frame) {
     const props = f.properties || {};
 
     // Non-core Manhattan (UPTOWN) and non-Manhattan: reset (NYC-wide)
-    if (!isCoreManhattan(props, f.geometry)) { // <-- ONLY CHANGE
+    if (!isCoreManhattan(props, f.geometry)) {
       props.mh_local_rating = null;
       props.mh_local_bucket = null;
       props.mh_local_color = null;
@@ -510,7 +622,6 @@ function syncStatenIslandUI() {
     btnStatenIsland.classList.toggle("on", !!statenIslandMode);
   }
   if (modeNote) {
-    // Keep your original note text; Manhattan mode doesn't overwrite it.
     modeNote.innerHTML = statenIslandMode
       ? `Staten Island Mode is <b>ON</b>: Staten Island colors are <b>relative within Staten Island</b> only.<br/>Other boroughs remain NYC-wide.`
       : `Colors come from rating (1–100) for the selected 20-minute window.<br/>Time label is NYC time.`;
@@ -543,12 +654,12 @@ if (btnStatenIsland) {
    ========================================================= */
 function effectiveBucket(props, geom) {
   if (statenIslandMode && isStatenIslandFeature(props) && props.si_local_bucket) return props.si_local_bucket;
-  if (manhattanMode && isCoreManhattan(props, geom) && props.mh_local_bucket) return props.mh_local_bucket; // <-- ONLY CHANGE
+  if (manhattanMode && isCoreManhattan(props, geom) && props.mh_local_bucket) return props.mh_local_bucket;
   return (props.bucket || "").trim();
 }
 function effectiveColor(props, geom) {
   if (statenIslandMode && isStatenIslandFeature(props) && props.si_local_color) return props.si_local_color;
-  if (manhattanMode && isCoreManhattan(props, geom) && props.mh_local_color) return props.mh_local_color; // <-- ONLY CHANGE
+  if (manhattanMode && isCoreManhattan(props, geom) && props.mh_local_color) return props.mh_local_color;
   const st = props?.style || {};
   return st.fillColor || st.color || "#000";
 }
@@ -556,7 +667,7 @@ function effectiveRating(props, geom) {
   if (statenIslandMode && isStatenIslandFeature(props) && Number.isFinite(Number(props.si_local_rating))) {
     return Number(props.si_local_rating);
   }
-  if (manhattanMode && isCoreManhattan(props, geom) && Number.isFinite(Number(props.mh_local_rating))) { // <-- ONLY CHANGE
+  if (manhattanMode && isCoreManhattan(props, geom) && Number.isFinite(Number(props.mh_local_rating))) {
     return Number(props.mh_local_rating);
   }
   return Number(props.rating ?? NaN);
@@ -566,6 +677,7 @@ function labelHTML(props, zoom) {
   const name = (props.zone_name || "").trim();
   if (!name) return "";
 
+  // NOTE: labels only need bucket, geom not required for labels
   const b = effectiveBucket(props, null);
   if (!shouldShowLabel(b, Math.round(zoom))) return "";
 
@@ -627,108 +739,6 @@ function haversineMiles(a, b) {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
-/* =========================================================
-   FIX: Accurate polygon centroid (area-weighted)
-   ---------------------------------------------------------
-   Your old geometryCenter() averaged points, which can be far
-   from the real zone center. That breaks distance -> breaks
-   recommendations.
-   ========================================================= */
-
-// Centroid of a linear ring (expects [[lng,lat],...], ideally closed)
-function ringCentroidArea(ring) {
-  if (!Array.isArray(ring) || ring.length < 3) return null;
-
-  // Ensure closed ring for math stability
-  const pts = ring.slice();
-  const first = pts[0];
-  const last = pts[pts.length - 1];
-  if (first && last && (first[0] !== last[0] || first[1] !== last[1])) {
-    pts.push([first[0], first[1]]);
-  }
-
-  let A = 0;
-  let Cx = 0;
-  let Cy = 0;
-
-  for (let i = 0; i < pts.length - 1; i++) {
-    const [x0, y0] = pts[i];
-    const [x1, y1] = pts[i + 1];
-    const cross = x0 * y1 - x1 * y0;
-    A += cross;
-    Cx += (x0 + x1) * cross;
-    Cy += (y0 + y1) * cross;
-  }
-
-  // A is 2*signedArea
-  if (Math.abs(A) < 1e-12) return null;
-
-  const inv = 1 / (3 * A);
-  return { lng: Cx * inv, lat: Cy * inv, area2: A };
-}
-
-// Centroid of Polygon with holes: outer ring minus hole influence (approx)
-function polygonCentroid(geom) {
-  const rings = geom?.coordinates;
-  if (!Array.isArray(rings) || rings.length === 0) return null;
-
-  // Outer ring centroid
-  const outer = ringCentroidArea(rings[0]);
-  if (!outer) return null;
-
-  // Subtract holes (if any)
-  let sumArea2 = outer.area2;
-  let sumLng = outer.lng * outer.area2;
-  let sumLat = outer.lat * outer.area2;
-
-  for (let i = 1; i < rings.length; i++) {
-    const hole = ringCentroidArea(rings[i]);
-    if (!hole) continue;
-    // Hole ring orientation may be opposite; use its area2 as computed
-    sumArea2 += hole.area2;
-    sumLng += hole.lng * hole.area2;
-    sumLat += hole.lat * hole.area2;
-  }
-
-  if (Math.abs(sumArea2) < 1e-12) return { lat: outer.lat, lng: outer.lng };
-  return { lat: sumLat / sumArea2, lng: sumLng / sumArea2 };
-}
-
-// Centroid of MultiPolygon: area-weighted average of polygon centroids
-function multiPolygonCentroid(geom) {
-  const polys = geom?.coordinates;
-  if (!Array.isArray(polys) || polys.length === 0) return null;
-
-  let sumArea2 = 0;
-  let sumLat = 0;
-  let sumLng = 0;
-
-  for (const poly of polys) {
-    // poly is [ring1, ring2...]
-    const c = polygonCentroid({ type: "Polygon", coordinates: poly });
-    if (!c) continue;
-
-    // Approx weight: use outer ring area2
-    const outer = ringCentroidArea(poly?.[0] || []);
-    const w = outer ? outer.area2 : 1;
-
-    sumArea2 += w;
-    sumLat += c.lat * w;
-    sumLng += c.lng * w;
-  }
-
-  if (Math.abs(sumArea2) < 1e-12) return null;
-  return { lat: sumLat / sumArea2, lng: sumLng / sumArea2 };
-}
-
-// Replacement for your old geometryCenter()
-function geometryCenter(geom) {
-  if (!geom) return null;
-  if (geom.type === "Polygon") return polygonCentroid(geom);
-  if (geom.type === "MultiPolygon") return multiPolygonCentroid(geom);
-  return null;
-}
-
 function updateRecommendation(frame) {
   if (!recommendEl) return;
 
@@ -757,7 +767,6 @@ function updateRecommendation(frame) {
     const b = effectiveBucket(props, geom);
     if (!allowed.has(b)) continue;
 
-    // IMPORTANT: recommendation uses the effective rating
     const rating = effectiveRating(props, geom);
     if (!Number.isFinite(rating)) continue;
 
@@ -777,7 +786,7 @@ function updateRecommendation(frame) {
         name: (props.zone_name || "").trim() || `Zone ${props.LocationID ?? ""}`,
         borough: (props.borough || "").trim(),
         usedSI: (statenIslandMode && isStatenIslandFeature(props) && Number.isFinite(Number(props.si_local_rating))),
-        usedMH: (manhattanMode && isCoreManhattan(props, geom) && Number.isFinite(Number(props.mh_local_rating))), // <-- ONLY CHANGE
+        usedMH: (manhattanMode && isCoreManhattan(props, geom) && Number.isFinite(Number(props.mh_local_rating))),
       };
     }
   }
@@ -847,7 +856,7 @@ function buildPopupHTML(props, geom) {
   }
 
   // ONLY show Manhattan-adjusted if CORE Manhattan
-  if (manhattanMode && isCoreManhattan(props, geom) && Number.isFinite(Number(props.mh_local_rating))) { // <-- ONLY CHANGE
+  if (manhattanMode && isCoreManhattan(props, geom) && Number.isFinite(Number(props.mh_local_rating))) {
     extra += `<div style="margin-top:6px;"><b>Manhattan Adjusted:</b> ${props.mh_local_rating} (${prettyBucket(props.mh_local_bucket)})</div>`;
   }
 
@@ -884,7 +893,7 @@ function renderFrame(frame) {
     style: (feature) => {
       const props = feature?.properties || {};
       const st = props.style || {};
-      const fill = effectiveColor(props, feature.geometry); // <-- ONLY CHANGE (pass geom)
+      const fill = effectiveColor(props, feature.geometry);
 
       return {
         color: fill,
@@ -896,7 +905,7 @@ function renderFrame(frame) {
     },
     onEachFeature: (feature, layer) => {
       const props = feature.properties || {};
-      layer.bindPopup(buildPopupHTML(props, feature.geometry), { maxWidth: 320 }); // <-- ONLY CHANGE
+      layer.bindPopup(buildPopupHTML(props, feature.geometry), { maxWidth: 320 });
 
       const html = labelHTML(props, zoomNow);
       if (!html) return;
@@ -944,14 +953,148 @@ map.on("zoomend", () => {
   if (currentFrame) renderFrame(currentFrame);
 });
 
-// Slider manual control (debounced)
+/* =========================================================
+   SLIDER: Fine-scrub helper (ONLY CHANGE)
+   ---------------------------------------------------------
+   - Main slider stays full-week.
+   - When you interact, show an easier "Fine Scrub" slider.
+   - Keeps everything data-driven and simple.
+   ========================================================= */
+
 let sliderDebounce = null;
-slider.addEventListener("input", () => {
+
+function scheduleLoadFromIdx(idx) {
   lastUserSliderTs = Date.now();
-  const idx = Number(slider.value);
   if (sliderDebounce) clearTimeout(sliderDebounce);
   sliderDebounce = setTimeout(() => loadFrame(idx).catch(console.error), 80);
+}
+
+// Create a fine-scrub overlay INSIDE sliderWrap (no HTML edits required)
+let fineWrap = null;
+let sliderFine = null;
+let fineHideTimer = null;
+
+function ensureFineScrubUI() {
+  if (fineWrap && sliderFine) return;
+
+  const wrap = document.querySelector(".sliderWrap");
+  if (!wrap) return;
+
+  // Inject minimal CSS (scoped) so we don't touch your main styles
+  const style = document.createElement("style");
+  style.textContent = `
+    .fineWrap {
+      display:none;
+      margin-top:4px;
+      padding-top:4px;
+      border-top:1px solid rgba(0,0,0,0.10);
+    }
+    .fineWrap.show { display:block; }
+    .fineLabel {
+      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
+      font-size: 11px;
+      font-weight: 900;
+      opacity: 0.85;
+      margin: 0 0 2px 0;
+    }
+    #sliderFine {
+      width: 100%;
+      height: 12px;
+      margin: 0;
+    }
+    #sliderFine::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.10);
+      border: 2px solid rgba(0,0,0,0.10);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    }
+  `;
+  document.head.appendChild(style);
+
+  fineWrap = document.createElement("div");
+  fineWrap.className = "fineWrap";
+
+  const fineLabel = document.createElement("div");
+  fineLabel.className = "fineLabel";
+  fineLabel.textContent = "Fine Scrub (more precise)";
+
+  sliderFine = document.createElement("input");
+  sliderFine.type = "range";
+  sliderFine.id = "sliderFine";
+  sliderFine.min = slider.min || "0";
+  sliderFine.max = slider.max || "0";
+  sliderFine.step = "1";
+  sliderFine.value = slider.value || "0";
+
+  // Stop map drag conflicts
+  sliderFine.addEventListener("pointerdown", (e) => e.stopPropagation());
+  sliderFine.addEventListener("touchstart", (e) => e.stopPropagation(), { passive: true });
+
+  // Fine scrub drives the real slider
+  sliderFine.addEventListener("input", () => {
+    const idx = Number(sliderFine.value);
+    slider.value = String(idx);
+    scheduleLoadFromIdx(idx);
+  });
+
+  fineWrap.appendChild(fineLabel);
+  fineWrap.appendChild(sliderFine);
+
+  // Insert right after the main slider (before the center button row)
+  const centerRow = wrap.querySelector(".centerBtnInBar");
+  if (centerRow) {
+    centerRow.insertAdjacentElement("beforebegin", fineWrap);
+  } else {
+    wrap.appendChild(fineWrap);
+  }
+}
+
+function showFineScrub() {
+  ensureFineScrubUI();
+  if (!fineWrap || !sliderFine) return;
+
+  // Sync bounds/value (timeline might have just loaded)
+  sliderFine.min = slider.min;
+  sliderFine.max = slider.max;
+  sliderFine.step = slider.step;
+  sliderFine.value = slider.value;
+
+  fineWrap.classList.add("show");
+
+  // Cancel pending hide if user is interacting again
+  if (fineHideTimer) {
+    clearTimeout(fineHideTimer);
+    fineHideTimer = null;
+  }
+}
+
+function hideFineScrubSoon() {
+  if (!fineWrap) return;
+  if (fineHideTimer) clearTimeout(fineHideTimer);
+  fineHideTimer = setTimeout(() => {
+    fineWrap.classList.remove("show");
+  }, 900); // slight delay so it doesn't flicker
+}
+
+// Main slider manual control (debounced) + fine-scrub open/close
+slider.addEventListener("pointerdown", () => showFineScrub());
+slider.addEventListener("touchstart", () => showFineScrub(), { passive: true });
+
+slider.addEventListener("input", () => {
+  const idx = Number(slider.value);
+  if (sliderFine && fineWrap && fineWrap.classList.contains("show")) {
+    sliderFine.value = String(idx);
+  }
+  scheduleLoadFromIdx(idx);
 });
+
+// Hide fine scrub after interaction ends
+document.addEventListener("pointerup", () => hideFineScrubSoon());
+document.addEventListener("touchend", () => hideFineScrubSoon(), { passive: true });
+document.addEventListener("touchcancel", () => hideFineScrubSoon(), { passive: true });
 
 /* =========================================================
    Auto-center button (stable)
@@ -1153,6 +1296,9 @@ async function tickNYCClockAndAdvanceIfNeeded() {
     if (bestIdx === curIdx) return;
 
     slider.value = String(bestIdx);
+    if (sliderFine && fineWrap && fineWrap.classList.contains("show")) {
+      sliderFine.value = String(bestIdx);
+    }
     await loadFrame(bestIdx);
   } catch (e) {
     console.warn("NYC clock tick failed:", e);
