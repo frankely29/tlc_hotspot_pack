@@ -136,7 +136,7 @@
       font-weight: 700;
     }
 
-    /* ---------- Bottom slider (thin + ALWAYS visible with safe-area) ---------- */
+    /* ---------- Bottom slider (THINNER + ALWAYS visible with safe-area) ---------- */
     .sliderWrap {
       position: absolute;
       left: 10px;
@@ -146,18 +146,66 @@
       background: rgba(255,255,255,0.92);
       border-radius: 14px;
       box-shadow: 0 6px 18px rgba(0,0,0,0.15);
-      padding: 6px 10px;
+
+      /* thinner overall */
+      padding: 5px 10px;
+
       font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
     }
     .timeLabel {
       font-size: 16px;
       font-weight: 950;
-      margin: 0 0 4px 0;
+      margin: 0 0 3px 0; /* slightly tighter */
     }
+
+    /* Make the slider track thinner (thumb remains usable) */
     input[type="range"] {
       width: 100%;
-      height: 18px;
+      height: 12px;      /* thinner */
       margin: 0;
+    }
+
+    /* iOS / Safari: keep thumb easy to grab without making the bar tall */
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      background: rgba(0,160,255,0.35);
+      border: 2px solid rgba(0,0,0,0.10);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      cursor: pointer;
+    }
+
+    /* ---------- Precision scrub (AUTO opens while dragging) ---------- */
+    .fineWrap {
+      display: none; /* hidden until you touch the main slider */
+      margin-top: 4px;
+      padding-top: 4px;
+      border-top: 1px solid rgba(0,0,0,0.10);
+    }
+    .fineWrap.show {
+      display: block;
+    }
+    .fineLabel {
+      font-size: 11px;
+      font-weight: 900;
+      opacity: 0.85;
+      margin: 0 0 2px 0;
+    }
+    #sliderFine {
+      width: 100%;
+      height: 12px; /* thin also */
+    }
+    #sliderFine::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.10);
+      border: 2px solid rgba(0,0,0,0.10);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+      cursor: pointer;
     }
 
     .centerBtnInBar{
