@@ -25,23 +25,10 @@
    - Uptown Manhattan stays NYC-wide
    - We detect this by zone centroid latitude cutoff
 
-   =========================================================
-   SLIDER UPDATE (ONLY CHANGE WE MADE NOW):
-   ---------------------------------------------------------
-   You wanted:
-   - Slider a little thinner
-   - More precise sliding (sometimes tiny move jumps too far)
-   - Keep ability to scrub the whole week
-
-   Solution (frontend-only, no backend load change):
-   - Keep the main week slider exactly as-is (still full week).
-   - When you touch/drag the slider, a temporary "Fine Scrub" slider
-     pops up (bigger thumb + easier control). It mirrors the same
-     min/max/value, just easier to drag precisely.
-   - It auto-hides when you stop interacting.
-
    WARNING:
-   - No other logic changed.
+   - This does NOT increase Railway load. It only changes frontend coloring.
+   - It does NOT change your backend frames; it only recalculates Manhattan
+     presentation and recommendation weighting on the fly.
    ========================================================= */
 
 const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
@@ -58,21 +45,11 @@ const USER_SLIDER_GRACE_MS = 25 * 1000;
 
 /* =========================================================
    MANHATTAN MODE — DEFAULT SETTINGS (SAFE TO EDIT)
-   ---------------------------------------------------------
-   These only affect Manhattan when Manhattan Mode is ON.
    ========================================================= */
 const LS_KEY_MANHATTAN = "manhattan_mode_enabled";
-
-// Manhattan adjusted rating uses percentiles inside Manhattan ONLY:
-// score = (PAY_WEIGHT * payPercentile) + (VOL_WEIGHT * pickupPercentile)
-const MANHATTAN_PAY_WEIGHT = 0.60;   // higher = favor higher pay zones in Manhattan more
-const MANHATTAN_VOL_WEIGHT = 0.40;   // lower = de-emphasize pure demand (saturation risk proxy)
-
-// Optional penalty to gently push Manhattan down overall when mode is ON.
-// Example 0.90 = 10% penalty, 0.85 = 15% penalty.
+const MANHATTAN_PAY_WEIGHT = 0.60;
+const MANHATTAN_VOL_WEIGHT = 0.40;
 const MANHATTAN_GLOBAL_PENALTY = 0.95;
-
-// Minimum Manhattan zones in frame needed to compute percentiles reliably
 const MANHATTAN_MIN_ZONES = 10;
 
 /* =========================================================
@@ -80,9 +57,7 @@ const MANHATTAN_MIN_ZONES = 10;
    ---------------------------------------------------------
    Manhattan Mode should ONLY affect Midtown + Lower Manhattan.
    Uptown Manhattan stays NYC-wide.
-   We do this using centroid latitude cutoff (data-driven).
    ========================================================= */
-// ~96th St-ish cutoff (excludes Harlem / Inwood / Wash Heights / etc)
 const MANHATTAN_CORE_MAX_LAT = 40.795;
 
 /* =========================================================
@@ -143,6 +118,10 @@ function formatNYCLabel(iso) {
   const ampm = h >= 12 ? "PM" : "AM";
   const mm = String(m).padStart(2, "0");
   return `${names[dow_m]} ${hr12}:${mm} ${ampm}`;
+}
+function dayKeyFromIso(iso) {
+  // day-of-week key (Mon..Sun) for grouping a day's indices
+  return String(dowMon0FromIso(iso));
 }
 
 // Get NYC minute-of-week rounded DOWN to current BIN_MINUTES bucket
@@ -254,11 +233,7 @@ function isStatenIslandFeature(props) {
 }
 
 /* =========================================================
-   Manhattan Mode (pay-weight Manhattan-only recolor)
-   DEFAULT behavior, do not change unless you know why.
-   ---------------------------------------------------------
-   We create the button dynamically if it doesn't exist in HTML,
-   so you do NOT need to edit index.html.
+   Manhattan Mode
    ========================================================= */
 let manhattanMode = (localStorage.getItem(LS_KEY_MANHATTAN) || "0") === "1";
 
@@ -269,15 +244,10 @@ function isManhattanFeature(props) {
 
 /* =========================================================
    FIX: Accurate polygon centroid (area-weighted)
-   ---------------------------------------------------------
-   Needed for: Manhattan core cutoff + recommendations.
    ========================================================= */
-
-// Centroid of a linear ring (expects [[lng,lat],...], ideally closed)
 function ringCentroidArea(ring) {
   if (!Array.isArray(ring) || ring.length < 3) return null;
 
-  // Ensure closed ring for math stability
   const pts = ring.slice();
   const first = pts[0];
   const last = pts[pts.length - 1];
@@ -298,23 +268,18 @@ function ringCentroidArea(ring) {
     Cy += (y0 + y1) * cross;
   }
 
-  // A is 2*signedArea
   if (Math.abs(A) < 1e-12) return null;
 
   const inv = 1 / (3 * A);
   return { lng: Cx * inv, lat: Cy * inv, area2: A };
 }
-
-// Centroid of Polygon with holes: outer ring minus hole influence (approx)
 function polygonCentroid(geom) {
   const rings = geom?.coordinates;
   if (!Array.isArray(rings) || rings.length === 0) return null;
 
-  // Outer ring centroid
   const outer = ringCentroidArea(rings[0]);
   if (!outer) return null;
 
-  // Subtract holes (if any)
   let sumArea2 = outer.area2;
   let sumLng = outer.lng * outer.area2;
   let sumLat = outer.lat * outer.area2;
@@ -322,7 +287,6 @@ function polygonCentroid(geom) {
   for (let i = 1; i < rings.length; i++) {
     const hole = ringCentroidArea(rings[i]);
     if (!hole) continue;
-    // Hole ring orientation may be opposite; use its area2 as computed
     sumArea2 += hole.area2;
     sumLng += hole.lng * hole.area2;
     sumLat += hole.lat * hole.area2;
@@ -331,8 +295,6 @@ function polygonCentroid(geom) {
   if (Math.abs(sumArea2) < 1e-12) return { lat: outer.lat, lng: outer.lng };
   return { lat: sumLat / sumArea2, lng: sumLng / sumArea2 };
 }
-
-// Centroid of MultiPolygon: area-weighted average of polygon centroids
 function multiPolygonCentroid(geom) {
   const polys = geom?.coordinates;
   if (!Array.isArray(polys) || polys.length === 0) return null;
@@ -342,11 +304,9 @@ function multiPolygonCentroid(geom) {
   let sumLng = 0;
 
   for (const poly of polys) {
-    // poly is [ring1, ring2...]
     const c = polygonCentroid({ type: "Polygon", coordinates: poly });
     if (!c) continue;
 
-    // Approx weight: use outer ring area2
     const outer = ringCentroidArea(poly?.[0] || []);
     const w = outer ? outer.area2 : 1;
 
@@ -358,8 +318,6 @@ function multiPolygonCentroid(geom) {
   if (Math.abs(sumArea2) < 1e-12) return null;
   return { lat: sumLat / sumArea2, lng: sumLng / sumArea2 };
 }
-
-// Replacement for old geometryCenter()
 function geometryCenter(geom) {
   if (!geom) return null;
   if (geom.type === "Polygon") return polygonCentroid(geom);
@@ -368,11 +326,7 @@ function geometryCenter(geom) {
 }
 
 /* =========================================================
-   Manhattan Mode — UPTOWN EXCLUSION (ONLY CHANGE)
-   ---------------------------------------------------------
-   Midtown + Lower Manhattan ONLY:
-   - require borough=Manhattan
-   - require centroid.lat <= MANHATTAN_CORE_MAX_LAT
+   Manhattan Mode — UPTOWN EXCLUSION
    ========================================================= */
 function isCoreManhattan(props, geom) {
   if (!isManhattanFeature(props)) return false;
@@ -381,16 +335,17 @@ function isCoreManhattan(props, geom) {
   return c.lat <= MANHATTAN_CORE_MAX_LAT;
 }
 
+/* =========================================================
+   Manhattan button creation
+   ========================================================= */
 function ensureManhattanButton() {
-  // If you already added a button in HTML with id="btnManhattan", we reuse it.
   let btn = document.getElementById("btnManhattan");
   if (btn) return btn;
 
-  // Otherwise, create it and place it near the other mode buttons (best-effort).
   btn = document.createElement("button");
   btn.id = "btnManhattan";
   btn.type = "button";
-  btn.className = "navBtn"; // uses your existing styles (safe even if class differs)
+  btn.className = "navBtn";
   btn.style.marginLeft = "6px";
   btn.style.padding = "6px 10px";
   btn.style.borderRadius = "10px";
@@ -399,21 +354,18 @@ function ensureManhattanButton() {
   btn.style.fontWeight = "700";
   btn.style.fontSize = "12px";
 
-  // Try to insert into the same row as other legend buttons
   const navRow =
     document.getElementById("navRow") ||
     (legendEl ? legendEl.querySelector(".navRow") : null) ||
     (legendEl ? legendEl : null);
 
   if (navRow) {
-    // Insert after Staten Island button if present, otherwise append
     if (btnStatenIsland && btnStatenIsland.parentElement === navRow) {
       btnStatenIsland.insertAdjacentElement("afterend", btn);
     } else {
       navRow.appendChild(btn);
     }
   } else {
-    // Last resort: add to body (won't break app)
     document.body.appendChild(btn);
   }
 
@@ -427,7 +379,6 @@ function syncManhattanUI() {
   btnManhattan.textContent = manhattanMode ? "Manhattan Mode: ON" : "Manhattan Mode: OFF";
   btnManhattan.classList.toggle("on", !!manhattanMode);
 }
-
 syncManhattanUI();
 
 if (btnManhattan) {
@@ -441,14 +392,12 @@ if (btnManhattan) {
     manhattanMode = !manhattanMode;
     localStorage.setItem(LS_KEY_MANHATTAN, manhattanMode ? "1" : "0");
     syncManhattanUI();
-
-    // Re-render immediately to recolor Manhattan without changing slider/backend
     if (currentFrame) renderFrame(currentFrame);
   });
 }
 
 /* =========================================================
-   Shared rating->color helper (same thresholds as backend)
+   Shared rating->color helper
    ========================================================= */
 function colorFromLocalRating(r) {
   const x = Math.max(1, Math.min(100, Math.round(r)));
@@ -511,27 +460,10 @@ function applyStatenLocalView(frame) {
   return frame;
 }
 
-/* =========================================================
-   Manhattan Mode — compute Manhattan-only adjusted rating per frame
-   DEFAULT behavior, do not change unless you know why.
-   ---------------------------------------------------------
-   Uses CURRENT frame data only:
-     - pickups percentile within CORE Manhattan
-     - avg_driver_pay percentile within CORE Manhattan
-   Then:
-     score = PAY_WEIGHT*payP + VOL_WEIGHT*volP
-     rating = 1 + 99*score
-     then apply optional GLOBAL_PENALTY
-
-   UPTOWN EXCLUSION (ONLY CHANGE):
-   - We only include CORE Manhattan zones in the percentile pool
-   - Uptown Manhattan zones are cleared back to NYC-wide
-   ========================================================= */
 function applyManhattanLocalView(frame) {
   const feats = frame?.polygons?.features || [];
   if (!feats.length) return frame;
 
-  // Collect CORE Manhattan pickups and pay (only where data is valid)
   const mPickups = [];
   const mPay = [];
 
@@ -546,7 +478,6 @@ function applyManhattanLocalView(frame) {
     if (Number.isFinite(pay)) mPay.push(pay);
   }
 
-  // If too few CORE Manhattan zones in this frame, skip (prevents noisy flips)
   if (mPickups.length < MANHATTAN_MIN_ZONES || mPay.length < MANHATTAN_MIN_ZONES) {
     for (const f of feats) {
       const props = f.properties || {};
@@ -557,7 +488,6 @@ function applyManhattanLocalView(frame) {
     return frame;
   }
 
-  // Sort for percentile rank
   const pickSorted = mPickups.slice().sort((a, b) => a - b);
   const paySorted = mPay.slice().sort((a, b) => a - b);
 
@@ -576,7 +506,6 @@ function applyManhattanLocalView(frame) {
   for (const f of feats) {
     const props = f.properties || {};
 
-    // Non-core Manhattan (UPTOWN) and non-Manhattan: reset (NYC-wide)
     if (!isCoreManhattan(props, f.geometry)) {
       props.mh_local_rating = null;
       props.mh_local_bucket = null;
@@ -587,7 +516,6 @@ function applyManhattanLocalView(frame) {
     const pu = Number(props.pickups ?? NaN);
     const pay = Number(props.avg_driver_pay ?? NaN);
 
-    // If missing data, skip (keep null so it falls back to NYC)
     if (!Number.isFinite(pu) || !Number.isFinite(pay)) {
       props.mh_local_rating = null;
       props.mh_local_bucket = null;
@@ -598,11 +526,9 @@ function applyManhattanLocalView(frame) {
     const volP = percentileFromSorted(pickSorted, pu);
     const payP = percentileFromSorted(paySorted, pay);
 
-    // Data-driven Manhattan score: pay-weighted
     let score = MANHATTAN_PAY_WEIGHT * payP + MANHATTAN_VOL_WEIGHT * volP;
     score = Math.max(0, Math.min(1, score));
 
-    // Convert to 1..100 and apply optional global penalty
     let localRating = 1 + 99 * score;
     localRating = localRating * MANHATTAN_GLOBAL_PENALTY;
     localRating = Math.max(1, Math.min(100, localRating));
@@ -645,12 +571,6 @@ if (btnStatenIsland) {
 
 /* =========================================================
    Effective bucket/color/rating selection
-   DEFAULT behavior, do not change unless you know why.
-   ---------------------------------------------------------
-   Precedence:
-   1) Staten Island Mode for Staten Island zones
-   2) Manhattan Mode for CORE Manhattan zones ONLY (NOT Uptown)
-   3) Backend NYC rating
    ========================================================= */
 function effectiveBucket(props, geom) {
   if (statenIslandMode && isStatenIslandFeature(props) && props.si_local_bucket) return props.si_local_bucket;
@@ -677,7 +597,6 @@ function labelHTML(props, zoom) {
   const name = (props.zone_name || "").trim();
   if (!name) return "";
 
-  // NOTE: labels only need bucket, geom not required for labels
   const b = effectiveBucket(props, null);
   if (!shouldShowLabel(b, Math.round(zoom))) return "";
 
@@ -825,7 +744,6 @@ L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
   maxZoom: 19,
 }).addTo(map);
 
-// Panes so the nav arrow is always above labels/tooltips
 const labelsPane = map.createPane("labelsPane");
 labelsPane.style.zIndex = 450;
 
@@ -855,7 +773,6 @@ function buildPopupHTML(props, geom) {
     extra += `<div style="margin-top:6px;"><b>Staten Local Rating:</b> ${props.si_local_rating} (${prettyBucket(props.si_local_bucket)})</div>`;
   }
 
-  // ONLY show Manhattan-adjusted if CORE Manhattan
   if (manhattanMode && isCoreManhattan(props, geom) && Number.isFinite(Number(props.mh_local_rating))) {
     extra += `<div style="margin-top:6px;"><b>Manhattan Adjusted:</b> ${props.mh_local_rating} (${prettyBucket(props.mh_local_bucket)})</div>`;
   }
@@ -875,7 +792,6 @@ function buildPopupHTML(props, geom) {
 function renderFrame(frame) {
   currentFrame = frame;
 
-  // Apply local transforms (do NOT change backend data; only adds extra fields)
   if (statenIslandMode) applyStatenLocalView(currentFrame);
   if (manhattanMode) applyManhattanLocalView(currentFrame);
 
@@ -940,7 +856,6 @@ async function loadTimeline() {
   slider.max = String(timeline.length - 1);
   slider.step = "1";
 
-  // Start at NYC "now" bucket (closest available)
   const nowMinWeek = getNowNYCMinuteOfWeekRounded();
   const idx = pickClosestIndex(minutesOfWeek, nowMinWeek);
   slider.value = String(idx);
@@ -948,158 +863,262 @@ async function loadTimeline() {
   await loadFrame(idx);
 }
 
-// Re-render labels on zoom changes
 map.on("zoomend", () => {
   if (currentFrame) renderFrame(currentFrame);
 });
 
-/* =========================================================
-   SLIDER: Fine-scrub helper (ONLY CHANGE)
-   ---------------------------------------------------------
-   - Main slider stays full-week.
-   - When you interact, show an easier "Fine Scrub" slider.
-   - Keeps everything data-driven and simple.
-   ========================================================= */
-
+// Slider manual control (debounced)
 let sliderDebounce = null;
-
-function scheduleLoadFromIdx(idx) {
+slider.addEventListener("input", () => {
   lastUserSliderTs = Date.now();
+  const idx = Number(slider.value);
   if (sliderDebounce) clearTimeout(sliderDebounce);
   sliderDebounce = setTimeout(() => loadFrame(idx).catch(console.error), 80);
-}
+});
 
-// Create a fine-scrub overlay INSIDE sliderWrap (no HTML edits required)
+/* =========================================================
+   Fine Scrub (more precise) — UI
+   ---------------------------------------------------------
+   Purpose:
+   iOS slider can “jump” too much. This adds a SHORT-range
+   precision slider for the CURRENT DAY only.
+
+   - Main slider still spans the whole week (unchanged)
+   - Fine scrub only spans the selected day (more control)
+   - Styling updated to look professional (card + header + pill)
+   ========================================================= */
 let fineWrap = null;
 let sliderFine = null;
+let fineDayIndices = [];
 let fineHideTimer = null;
 
 function ensureFineScrubUI() {
   if (fineWrap && sliderFine) return;
 
-  const wrap = document.querySelector(".sliderWrap");
+  const wrap = slider?.closest(".sliderWrap") || null;
   if (!wrap) return;
-
-  // Inject minimal CSS (scoped) so we don't touch your main styles
-  const style = document.createElement("style");
-  style.textContent = `
-    .fineWrap {
-      display:none;
-      margin-top:4px;
-      padding-top:4px;
-      border-top:1px solid rgba(0,0,0,0.10);
-    }
-    .fineWrap.show { display:block; }
-    .fineLabel {
-      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
-      font-size: 11px;
-      font-weight: 900;
-      opacity: 0.85;
-      margin: 0 0 2px 0;
-    }
-    #sliderFine {
-      width: 100%;
-      height: 12px;
-      margin: 0;
-    }
-    #sliderFine::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      width: 22px;
-      height: 22px;
-      border-radius: 999px;
-      background: rgba(0,0,0,0.10);
-      border: 2px solid rgba(0,0,0,0.10);
-      box-shadow: 0 2px 8px rgba(0,0,0,0.12);
-    }
-  `;
-  document.head.appendChild(style);
 
   fineWrap = document.createElement("div");
   fineWrap.className = "fineWrap";
 
+  // Inject professional styling (ONLY affects fine scrub UI)
+  const style = document.createElement("style");
+  style.textContent = `
+    .fineWrap{
+      display:none;
+      margin-top:6px;
+      padding: 8px 10px;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.70);
+      border: 1px solid rgba(0,0,0,0.08);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      transform: translateY(4px);
+      opacity: 0;
+      transition: opacity 160ms ease, transform 160ms ease;
+    }
+    .fineWrap.show{
+      display:block;
+      opacity: 1;
+      transform: translateY(0px);
+    }
+    .fineHeader{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:8px;
+      margin: 0 0 6px 0;
+    }
+    .fineLabel{
+      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
+      font-size: 12px;
+      font-weight: 950;
+      letter-spacing: 0.1px;
+      color: rgba(0,0,0,0.80);
+      margin: 0;
+      line-height: 1.1;
+    }
+    .finePill{
+      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
+      font-size: 11px;
+      font-weight: 900;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(0,160,255,0.10);
+      color: rgba(0,0,0,0.75);
+      border: 1px solid rgba(0,160,255,0.18);
+      white-space: nowrap;
+    }
+
+    /* Fine slider: thinner + cleaner */
+    #sliderFine{
+      width: 100%;
+      height: 14px;   /* still easy to touch */
+      margin: 0;
+      -webkit-appearance: none;
+      appearance: none;
+      background: transparent;
+    }
+
+    /* Track (WebKit) */
+    #sliderFine::-webkit-slider-runnable-track{
+      height: 4px;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.10);
+    }
+
+    /* Thumb (WebKit) */
+    #sliderFine::-webkit-slider-thumb{
+      -webkit-appearance: none;
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.98);
+      border: 1px solid rgba(0,0,0,0.18);
+      box-shadow: 0 6px 16px rgba(0,0,0,0.14);
+      margin-top: -9px;
+    }
+
+    /* Track (Firefox) */
+    #sliderFine::-moz-range-track{
+      height: 4px;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.10);
+    }
+    #sliderFine::-moz-range-thumb{
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.98);
+      border: 1px solid rgba(0,0,0,0.18);
+      box-shadow: 0 6px 16px rgba(0,0,0,0.14);
+    }
+  `;
+  document.head.appendChild(style);
+
+  // Header row (label + pill)
+  const fineHeader = document.createElement("div");
+  fineHeader.className = "fineHeader";
+
   const fineLabel = document.createElement("div");
   fineLabel.className = "fineLabel";
-  fineLabel.textContent = "Fine Scrub (more precise)";
+  fineLabel.textContent = "Fine scrub";
 
+  const finePill = document.createElement("div");
+  finePill.className = "finePill";
+  finePill.textContent = "Precision";
+
+  fineHeader.appendChild(fineLabel);
+  fineHeader.appendChild(finePill);
+
+  // The fine slider
   sliderFine = document.createElement("input");
-  sliderFine.type = "range";
   sliderFine.id = "sliderFine";
-  sliderFine.min = slider.min || "0";
-  sliderFine.max = slider.max || "0";
+  sliderFine.type = "range";
+  sliderFine.min = "0";
+  sliderFine.max = "0";
+  sliderFine.value = "0";
   sliderFine.step = "1";
-  sliderFine.value = slider.value || "0";
 
-  // Stop map drag conflicts
-  sliderFine.addEventListener("pointerdown", (e) => e.stopPropagation());
-  sliderFine.addEventListener("touchstart", (e) => e.stopPropagation(), { passive: true });
-
-  // Fine scrub drives the real slider
-  sliderFine.addEventListener("input", () => {
-    const idx = Number(sliderFine.value);
-    slider.value = String(idx);
-    scheduleLoadFromIdx(idx);
-  });
-
-  fineWrap.appendChild(fineLabel);
+  fineWrap.appendChild(fineHeader);
   fineWrap.appendChild(sliderFine);
 
-  // Insert right after the main slider (before the center button row)
+  // Insert directly under the main slider (inside sliderWrap)
+  // We insert before the Auto-center row so it looks intentional.
   const centerRow = wrap.querySelector(".centerBtnInBar");
   if (centerRow) {
     centerRow.insertAdjacentElement("beforebegin", fineWrap);
   } else {
     wrap.appendChild(fineWrap);
   }
+
+  // Stop map drags when using the fine slider
+  sliderFine.addEventListener("pointerdown", (e) => e.stopPropagation());
+  sliderFine.addEventListener("touchstart", (e) => e.stopPropagation(), { passive: true });
+
+  // Fine slider drives the main slider
+  let fineDebounce = null;
+  sliderFine.addEventListener("input", () => {
+    lastUserSliderTs = Date.now();
+    scheduleFineHide();
+
+    const pos = Number(sliderFine.value || "0");
+    const idx = fineDayIndices[pos];
+    if (!Number.isFinite(idx)) return;
+
+    slider.value = String(idx);
+
+    if (fineDebounce) clearTimeout(fineDebounce);
+    fineDebounce = setTimeout(() => loadFrame(idx).catch(console.error), 60);
+  });
 }
 
-function showFineScrub() {
+function scheduleFineHide() {
+  if (!fineWrap) return;
+  if (fineHideTimer) clearTimeout(fineHideTimer);
+  fineHideTimer = setTimeout(() => hideFineScrub(), 2200);
+}
+
+function showFineScrubForCurrentDay() {
+  if (!timeline.length) return;
   ensureFineScrubUI();
   if (!fineWrap || !sliderFine) return;
 
-  // Sync bounds/value (timeline might have just loaded)
-  sliderFine.min = slider.min;
-  sliderFine.max = slider.max;
-  sliderFine.step = slider.step;
-  sliderFine.value = slider.value;
+  const curIdx = Number(slider.value || "0");
+  const iso = timeline[curIdx];
+  if (!iso) return;
 
-  fineWrap.classList.add("show");
-
-  // Cancel pending hide if user is interacting again
-  if (fineHideTimer) {
-    clearTimeout(fineHideTimer);
-    fineHideTimer = null;
+  // Build list of indices for the CURRENT day-of-week only
+  const key = dayKeyFromIso(iso);
+  fineDayIndices = [];
+  for (let i = 0; i < timeline.length; i++) {
+    if (dayKeyFromIso(timeline[i]) === key) fineDayIndices.push(i);
   }
+  if (fineDayIndices.length < 2) return;
+
+  // Set fine slider range to just that day
+  sliderFine.min = "0";
+  sliderFine.max = String(fineDayIndices.length - 1);
+  sliderFine.step = "1";
+
+  // Set fine slider position to current idx within that day's list
+  let pos = fineDayIndices.indexOf(curIdx);
+  if (pos < 0) {
+    // fallback: nearest within day
+    pos = 0;
+    for (let j = 0; j < fineDayIndices.length; j++) {
+      if (Math.abs(fineDayIndices[j] - curIdx) < Math.abs(fineDayIndices[pos] - curIdx)) pos = j;
+    }
+  }
+  sliderFine.value = String(pos);
+
+  // Show with smooth animation
+  fineWrap.style.display = "block";
+  requestAnimationFrame(() => fineWrap.classList.add("show"));
+  scheduleFineHide();
 }
 
-function hideFineScrubSoon() {
+function hideFineScrub() {
   if (!fineWrap) return;
-  if (fineHideTimer) clearTimeout(fineHideTimer);
-  fineHideTimer = setTimeout(() => {
-    fineWrap.classList.remove("show");
-  }, 900); // slight delay so it doesn't flicker
+  fineWrap.classList.remove("show");
+  setTimeout(() => {
+    if (!fineWrap.classList.contains("show")) fineWrap.style.display = "none";
+  }, 180);
 }
 
-// Main slider manual control (debounced) + fine-scrub open/close
-slider.addEventListener("pointerdown", () => showFineScrub());
-slider.addEventListener("touchstart", () => showFineScrub(), { passive: true });
-
+/* =========================================================
+   Hook Fine Scrub to main slider interactions
+   ========================================================= */
+slider.addEventListener("pointerdown", () => showFineScrubForCurrentDay());
+slider.addEventListener("touchstart", () => showFineScrubForCurrentDay(), { passive: true });
 slider.addEventListener("input", () => {
-  const idx = Number(slider.value);
-  if (sliderFine && fineWrap && fineWrap.classList.contains("show")) {
-    sliderFine.value = String(idx);
-  }
-  scheduleLoadFromIdx(idx);
+  // When main slider moves, keep the fine scrub synced to the day
+  showFineScrubForCurrentDay();
 });
-
-// Hide fine scrub after interaction ends
-document.addEventListener("pointerup", () => hideFineScrubSoon());
-document.addEventListener("touchend", () => hideFineScrubSoon(), { passive: true });
-document.addEventListener("touchcancel", () => hideFineScrubSoon(), { passive: true });
 
 /* =========================================================
    Auto-center button (stable)
-   - ON: follows your GPS arrow
-   - OFF: you can explore freely
    ========================================================= */
 const btnCenter = document.getElementById("btnCenter");
 let autoCenter = true;
@@ -1128,7 +1147,6 @@ if (btnCenter) {
     autoCenter = !autoCenter;
     syncCenterButton();
 
-    // IMPORTANT: no forced zoom changes here. If you want closer, you manually zoom.
     if (autoCenter && userLatLng) {
       suppressAutoDisableFor(800, () => map.panTo(userLatLng, { animate: true }));
     }
@@ -1145,7 +1163,7 @@ map.on("dragstart", disableAutoCenterBecauseUserIsExploring);
 map.on("zoomstart", disableAutoCenterBecauseUserIsExploring);
 
 /* =========================================================
-   Live location arrow + follow behavior (ORIGINAL ZOOM LOGIC)
+   Live location arrow + follow behavior
    ========================================================= */
 let gpsFirstFixDone = false;
 let navMarker = null;
@@ -1239,7 +1257,7 @@ function startLocationWatch() {
 
       if (!gpsFirstFixDone) {
         gpsFirstFixDone = true;
-        const targetZoom = Math.max(map.getZoom(), 13); // ORIGINAL behavior
+        const targetZoom = Math.max(map.getZoom(), 13);
         suppressAutoDisableFor(1200, () => map.setView(userLatLng, targetZoom, { animate: true }));
       } else {
         if (autoCenter) {
@@ -1271,8 +1289,6 @@ function startLocationWatch() {
 /* =========================================================
    AUTO-UPDATE (no manual refresh needed)
    ========================================================= */
-
-// Every 5 minutes: refresh the current frame (same slider index)
 async function refreshCurrentFrame() {
   try {
     const idx = Number(slider.value || "0");
@@ -1283,7 +1299,6 @@ async function refreshCurrentFrame() {
 }
 setInterval(refreshCurrentFrame, REFRESH_MS);
 
-// Every minute: if NYC moved into a NEW 20-min bucket, move slider + load that frame
 async function tickNYCClockAndAdvanceIfNeeded() {
   try {
     if (Date.now() - lastUserSliderTs < USER_SLIDER_GRACE_MS) return;
@@ -1296,9 +1311,6 @@ async function tickNYCClockAndAdvanceIfNeeded() {
     if (bestIdx === curIdx) return;
 
     slider.value = String(bestIdx);
-    if (sliderFine && fineWrap && fineWrap.classList.contains("show")) {
-      sliderFine.value = String(bestIdx);
-    }
     await loadFrame(bestIdx);
   } catch (e) {
     console.warn("NYC clock tick failed:", e);
@@ -1306,7 +1318,6 @@ async function tickNYCClockAndAdvanceIfNeeded() {
 }
 setInterval(tickNYCClockAndAdvanceIfNeeded, NYC_CLOCK_TICK_MS);
 
-// When tab becomes visible again (Safari), refresh immediately
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     refreshCurrentFrame().catch(() => {});
