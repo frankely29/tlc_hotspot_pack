@@ -54,9 +54,6 @@ const MANHATTAN_MIN_ZONES = 10;
 
 /* =========================================================
    MANHATTAN MODE — UPTOWN EXCLUSION (ONLY CHANGE)
-   ---------------------------------------------------------
-   Manhattan Mode should ONLY affect Midtown + Lower Manhattan.
-   Uptown Manhattan stays NYC-wide.
    ========================================================= */
 const MANHATTAN_CORE_MAX_LAT = 40.795;
 
@@ -120,8 +117,43 @@ function formatNYCLabel(iso) {
   return `${names[dow_m]} ${hr12}:${mm} ${ampm}`;
 }
 function dayKeyFromIso(iso) {
-  // day-of-week key (Mon..Sun) for grouping a day's indices
-  return String(dowMon0FromIso(iso));
+  return String(dowMon0FromIso(iso)); // Mon..Sun => 0..6
+}
+
+/* NEW: compact time (no day) */
+function formatTimeOnlyFromParts(h, m) {
+  const hr12 = ((h + 11) % 12) + 1;
+  const ampm = h >= 12 ? "PM" : "AM";
+  const mm = String(m).padStart(2, "0");
+  return `${hr12}:${mm} ${ampm}`;
+}
+
+/* NEW: build "Sun 5:20–5:40 PM" style range */
+function formatNYCRangeLabel(iso, minutesSpan) {
+  const { Y, M, D, h, m, s } = parseIsoNoTz(iso);
+  const start = new Date(Date.UTC(Y, M - 1, D, h, m, s));
+  const end = new Date(start.getTime() + minutesSpan * 60 * 1000);
+
+  // Start info
+  const dow_m = dowMon0FromIso(iso);
+  const names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+  const sh = start.getUTCHours();
+  const sm = start.getUTCMinutes();
+  const eh = end.getUTCHours();
+  const em = end.getUTCMinutes();
+
+  // If AM/PM same, show once at end: "5:20–5:40 PM"
+  const sAmpm = sh >= 12 ? "PM" : "AM";
+  const eAmpm = eh >= 12 ? "PM" : "AM";
+
+  const sCore = `${((sh + 11) % 12) + 1}:${String(sm).padStart(2, "0")}`;
+  const eCore = `${((eh + 11) % 12) + 1}:${String(em).padStart(2, "0")}`;
+
+  if (sAmpm === eAmpm) {
+    return `${names[dow_m]} ${sCore}–${eCore} ${eAmpm}`;
+  }
+  return `${names[dow_m]} ${sCore} ${sAmpm}–${eCore} ${eAmpm}`;
 }
 
 // Get NYC minute-of-week rounded DOWN to current BIN_MINUTES bucket
@@ -838,6 +870,9 @@ function renderFrame(frame) {
   }).addTo(map);
 
   updateRecommendation(currentFrame);
+
+  // Keep the precision chip text synced to current time selection
+  updatePrecisionChipText();
 }
 
 async function loadFrame(idx) {
@@ -874,101 +909,142 @@ slider.addEventListener("input", () => {
   const idx = Number(slider.value);
   if (sliderDebounce) clearTimeout(sliderDebounce);
   sliderDebounce = setTimeout(() => loadFrame(idx).catch(console.error), 80);
+
+  // When main slider moves, keep precision UI synced
+  showPrecisionUIWhileActive();
 });
 
 /* =========================================================
-   Fine Scrub (more precise) — UI
+   Precision UI (NEW PRO LOOK)
    ---------------------------------------------------------
-   Purpose:
-   iOS slider can “jump” too much. This adds a SHORT-range
-   precision slider for the CURRENT DAY only.
-
-   - Main slider still spans the whole week (unchanged)
-   - Fine scrub only spans the selected day (more control)
-   - Styling updated to look professional (card + header + pill)
+   Default: small chip that shows Day + Time range.
+   While dragging main slider: expands into a clean card with
+   a day-only fine scrub slider.
    ========================================================= */
-let fineWrap = null;
+let precisionWrap = null;
+let precisionChip = null;
+let precisionCard = null;
+let precisionTitle = null;
+let precisionSub = null;
 let sliderFine = null;
-let fineDayIndices = [];
-let fineHideTimer = null;
 
-function ensureFineScrubUI() {
-  if (fineWrap && sliderFine) return;
+let fineDayIndices = [];
+let precisionHideTimer = null;
+let draggingMain = false;
+
+function ensurePrecisionUI() {
+  if (precisionWrap && sliderFine) return;
 
   const wrap = slider?.closest(".sliderWrap") || null;
   if (!wrap) return;
 
-  fineWrap = document.createElement("div");
-  fineWrap.className = "fineWrap";
-
-  // Inject professional styling (ONLY affects fine scrub UI)
+  // One-time injected CSS (ONLY affects the precision UI)
   const style = document.createElement("style");
   style.textContent = `
-    .fineWrap{
+    .precisionWrap{
+      margin-top: 6px;
+      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+    }
+
+    /* Collapsed chip */
+    .precisionChip{
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(0,160,255,0.10);
+      border: 1px solid rgba(0,160,255,0.18);
+      color: rgba(0,0,0,0.78);
+      font-weight: 950;
+      font-size: 12px;
+      line-height: 1;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.06);
+    }
+    .precisionDot{
+      width: 7px; height: 7px;
+      border-radius: 999px;
+      background: rgba(0,160,255,0.75);
+      box-shadow: 0 0 0 3px rgba(0,160,255,0.12);
+      flex: 0 0 7px;
+    }
+    .precisionChip span{
+      font-weight: 950;
+      letter-spacing: 0.1px;
+      white-space: nowrap;
+    }
+
+    /* Expanded card */
+    .precisionCard{
       display:none;
-      margin-top:6px;
-      padding: 8px 10px;
-      border-radius: 12px;
-      background: rgba(255,255,255,0.70);
+      margin-top: 8px;
+      padding: 10px 10px 10px 10px;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.72);
       border: 1px solid rgba(0,0,0,0.08);
-      box-shadow: 0 4px 12px rgba(0,0,0,0.06);
-      backdrop-filter: blur(6px);
-      -webkit-backdrop-filter: blur(6px);
-      transform: translateY(4px);
+      box-shadow: 0 8px 20px rgba(0,0,0,0.10);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+
+      transform: translateY(6px);
       opacity: 0;
       transition: opacity 160ms ease, transform 160ms ease;
     }
-    .fineWrap.show{
+    .precisionCard.show{
       display:block;
       opacity: 1;
       transform: translateY(0px);
     }
-    .fineHeader{
+
+    .precisionHead{
       display:flex;
-      align-items:center;
+      align-items:flex-start;
       justify-content:space-between;
-      gap:8px;
-      margin: 0 0 6px 0;
+      gap:10px;
+      margin-bottom: 8px;
     }
-    .fineLabel{
-      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
+    .precisionTitle{
       font-size: 12px;
       font-weight: 950;
-      letter-spacing: 0.1px;
-      color: rgba(0,0,0,0.80);
-      margin: 0;
+      color: rgba(0,0,0,0.82);
       line-height: 1.1;
     }
-    .finePill{
-      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
+    .precisionSub{
       font-size: 11px;
       font-weight: 900;
-      padding: 3px 8px;
+      color: rgba(0,0,0,0.62);
+      line-height: 1.1;
+      margin-top: 2px;
+      white-space: nowrap;
+    }
+    .precisionPill{
+      font-size: 11px;
+      font-weight: 950;
+      padding: 4px 9px;
       border-radius: 999px;
-      background: rgba(0,160,255,0.10);
-      color: rgba(0,0,0,0.75);
-      border: 1px solid rgba(0,160,255,0.18);
+      background: rgba(0,0,0,0.05);
+      border: 1px solid rgba(0,0,0,0.08);
+      color: rgba(0,0,0,0.70);
       white-space: nowrap;
     }
 
-    /* Fine slider: thinner + cleaner */
+    /* Fine slider: clean + thin but easy touch */
     #sliderFine{
       width: 100%;
-      height: 14px;   /* still easy to touch */
+      height: 16px;
       margin: 0;
       -webkit-appearance: none;
       appearance: none;
       background: transparent;
     }
-
-    /* Track (WebKit) */
     #sliderFine::-webkit-slider-runnable-track{
       height: 4px;
       border-radius: 999px;
-      background: rgba(0,0,0,0.10);
+      background: rgba(0,0,0,0.12);
     }
-
-    /* Thumb (WebKit) */
     #sliderFine::-webkit-slider-thumb{
       -webkit-appearance: none;
       width: 22px;
@@ -976,15 +1052,13 @@ function ensureFineScrubUI() {
       border-radius: 999px;
       background: rgba(255,255,255,0.98);
       border: 1px solid rgba(0,0,0,0.18);
-      box-shadow: 0 6px 16px rgba(0,0,0,0.14);
+      box-shadow: 0 8px 18px rgba(0,0,0,0.16);
       margin-top: -9px;
     }
-
-    /* Track (Firefox) */
     #sliderFine::-moz-range-track{
       height: 4px;
       border-radius: 999px;
-      background: rgba(0,0,0,0.10);
+      background: rgba(0,0,0,0.12);
     }
     #sliderFine::-moz-range-thumb{
       width: 22px;
@@ -992,27 +1066,45 @@ function ensureFineScrubUI() {
       border-radius: 999px;
       background: rgba(255,255,255,0.98);
       border: 1px solid rgba(0,0,0,0.18);
-      box-shadow: 0 6px 16px rgba(0,0,0,0.14);
+      box-shadow: 0 8px 18px rgba(0,0,0,0.16);
     }
   `;
   document.head.appendChild(style);
 
-  // Header row (label + pill)
-  const fineHeader = document.createElement("div");
-  fineHeader.className = "fineHeader";
+  precisionWrap = document.createElement("div");
+  precisionWrap.className = "precisionWrap";
 
-  const fineLabel = document.createElement("div");
-  fineLabel.className = "fineLabel";
-  fineLabel.textContent = "Fine scrub";
+  // Chip (always visible)
+  precisionChip = document.createElement("div");
+  precisionChip.className = "precisionChip";
+  precisionChip.innerHTML = `<div class="precisionDot"></div><span id="precisionChipText">Precision</span>`;
 
-  const finePill = document.createElement("div");
-  finePill.className = "finePill";
-  finePill.textContent = "Precision";
+  // Expanded card (only while active)
+  precisionCard = document.createElement("div");
+  precisionCard.className = "precisionCard";
 
-  fineHeader.appendChild(fineLabel);
-  fineHeader.appendChild(finePill);
+  const head = document.createElement("div");
+  head.className = "precisionHead";
 
-  // The fine slider
+  const left = document.createElement("div");
+  precisionTitle = document.createElement("div");
+  precisionTitle.className = "precisionTitle";
+  precisionTitle.textContent = "Fine scrub (today only)";
+
+  precisionSub = document.createElement("div");
+  precisionSub.className = "precisionSub";
+  precisionSub.textContent = "—";
+
+  left.appendChild(precisionTitle);
+  left.appendChild(precisionSub);
+
+  const pill = document.createElement("div");
+  pill.className = "precisionPill";
+  pill.textContent = "More precise";
+
+  head.appendChild(left);
+  head.appendChild(pill);
+
   sliderFine = document.createElement("input");
   sliderFine.id = "sliderFine";
   sliderFine.type = "range";
@@ -1021,19 +1113,21 @@ function ensureFineScrubUI() {
   sliderFine.value = "0";
   sliderFine.step = "1";
 
-  fineWrap.appendChild(fineHeader);
-  fineWrap.appendChild(sliderFine);
+  precisionCard.appendChild(head);
+  precisionCard.appendChild(sliderFine);
 
-  // Insert directly under the main slider (inside sliderWrap)
-  // We insert before the Auto-center row so it looks intentional.
+  precisionWrap.appendChild(precisionChip);
+  precisionWrap.appendChild(precisionCard);
+
+  // Insert between main slider and Auto-center row (looks intentional)
   const centerRow = wrap.querySelector(".centerBtnInBar");
   if (centerRow) {
-    centerRow.insertAdjacentElement("beforebegin", fineWrap);
+    centerRow.insertAdjacentElement("beforebegin", precisionWrap);
   } else {
-    wrap.appendChild(fineWrap);
+    wrap.appendChild(precisionWrap);
   }
 
-  // Stop map drags when using the fine slider
+  // Stop map drags when using fine slider
   sliderFine.addEventListener("pointerdown", (e) => e.stopPropagation());
   sliderFine.addEventListener("touchstart", (e) => e.stopPropagation(), { passive: true });
 
@@ -1041,7 +1135,7 @@ function ensureFineScrubUI() {
   let fineDebounce = null;
   sliderFine.addEventListener("input", () => {
     lastUserSliderTs = Date.now();
-    scheduleFineHide();
+    schedulePrecisionCollapse();
 
     const pos = Number(sliderFine.value || "0");
     const idx = fineDayIndices[pos];
@@ -1052,70 +1146,124 @@ function ensureFineScrubUI() {
     if (fineDebounce) clearTimeout(fineDebounce);
     fineDebounce = setTimeout(() => loadFrame(idx).catch(console.error), 60);
   });
+
+  // Chip tap can also open the card briefly (nice UX)
+  precisionChip.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    showPrecisionCard(true);
+  });
+  precisionChip.addEventListener("touchstart", (e) => e.stopPropagation(), { passive: true });
 }
 
-function scheduleFineHide() {
-  if (!fineWrap) return;
-  if (fineHideTimer) clearTimeout(fineHideTimer);
-  fineHideTimer = setTimeout(() => hideFineScrub(), 2200);
+function updatePrecisionChipText() {
+  ensurePrecisionUI();
+  if (!precisionChip) return;
+  const chipTextEl = document.getElementById("precisionChipText");
+  if (!chipTextEl) return;
+
+  const idx = Number(slider.value || "0");
+  const iso = timeline[idx];
+  if (!iso) {
+    chipTextEl.textContent = "Precision";
+    return;
+  }
+
+  // Show day + time range for current 20-minute bin
+  chipTextEl.textContent = formatNYCRangeLabel(iso, BIN_MINUTES);
+
+  // Also update subheader inside the expanded card
+  if (precisionSub) precisionSub.textContent = chipTextEl.textContent;
 }
 
-function showFineScrubForCurrentDay() {
-  if (!timeline.length) return;
-  ensureFineScrubUI();
-  if (!fineWrap || !sliderFine) return;
-
+function buildFineIndicesForCurrentDay() {
+  fineDayIndices = [];
   const curIdx = Number(slider.value || "0");
   const iso = timeline[curIdx];
   if (!iso) return;
 
-  // Build list of indices for the CURRENT day-of-week only
   const key = dayKeyFromIso(iso);
-  fineDayIndices = [];
   for (let i = 0; i < timeline.length; i++) {
     if (dayKeyFromIso(timeline[i]) === key) fineDayIndices.push(i);
   }
+}
+
+function syncFineSliderToCurrentIdx() {
+  if (!sliderFine) return;
+
+  buildFineIndicesForCurrentDay();
   if (fineDayIndices.length < 2) return;
 
-  // Set fine slider range to just that day
   sliderFine.min = "0";
   sliderFine.max = String(fineDayIndices.length - 1);
   sliderFine.step = "1";
 
-  // Set fine slider position to current idx within that day's list
+  const curIdx = Number(slider.value || "0");
   let pos = fineDayIndices.indexOf(curIdx);
   if (pos < 0) {
-    // fallback: nearest within day
     pos = 0;
     for (let j = 0; j < fineDayIndices.length; j++) {
       if (Math.abs(fineDayIndices[j] - curIdx) < Math.abs(fineDayIndices[pos] - curIdx)) pos = j;
     }
   }
   sliderFine.value = String(pos);
-
-  // Show with smooth animation
-  fineWrap.style.display = "block";
-  requestAnimationFrame(() => fineWrap.classList.add("show"));
-  scheduleFineHide();
 }
 
-function hideFineScrub() {
-  if (!fineWrap) return;
-  fineWrap.classList.remove("show");
+function showPrecisionCard(sticky = false) {
+  ensurePrecisionUI();
+  if (!precisionCard) return;
+
+  updatePrecisionChipText();
+  syncFineSliderToCurrentIdx();
+
+  // show
+  precisionCard.style.display = "block";
+  requestAnimationFrame(() => precisionCard.classList.add("show"));
+
+  if (!sticky) schedulePrecisionCollapse();
+}
+
+function collapsePrecisionCard() {
+  if (!precisionCard) return;
+  precisionCard.classList.remove("show");
   setTimeout(() => {
-    if (!fineWrap.classList.contains("show")) fineWrap.style.display = "none";
+    if (!precisionCard.classList.contains("show")) precisionCard.style.display = "none";
   }, 180);
 }
 
-/* =========================================================
-   Hook Fine Scrub to main slider interactions
-   ========================================================= */
-slider.addEventListener("pointerdown", () => showFineScrubForCurrentDay());
-slider.addEventListener("touchstart", () => showFineScrubForCurrentDay(), { passive: true });
-slider.addEventListener("input", () => {
-  // When main slider moves, keep the fine scrub synced to the day
-  showFineScrubForCurrentDay();
+function schedulePrecisionCollapse() {
+  if (precisionHideTimer) clearTimeout(precisionHideTimer);
+  precisionHideTimer = setTimeout(() => {
+    if (!draggingMain) collapsePrecisionCard();
+  }, 1600);
+}
+
+function showPrecisionUIWhileActive() {
+  // When main slider is used, expand briefly and keep synced
+  showPrecisionCard(false);
+}
+
+/* Main slider events: expand while dragging, collapse after */
+slider.addEventListener("pointerdown", () => {
+  draggingMain = true;
+  showPrecisionCard(true);
 });
+slider.addEventListener("pointerup", () => {
+  draggingMain = false;
+  schedulePrecisionCollapse();
+});
+slider.addEventListener("pointercancel", () => {
+  draggingMain = false;
+  schedulePrecisionCollapse();
+});
+
+slider.addEventListener("touchstart", () => {
+  draggingMain = true;
+  showPrecisionCard(true);
+}, { passive: true });
+slider.addEventListener("touchend", () => {
+  draggingMain = false;
+  schedulePrecisionCollapse();
+}, { passive: true });
 
 /* =========================================================
    Auto-center button (stable)
@@ -1312,6 +1460,9 @@ async function tickNYCClockAndAdvanceIfNeeded() {
 
     slider.value = String(bestIdx);
     await loadFrame(bestIdx);
+
+    // keep chip synced after auto-advance
+    updatePrecisionChipText();
   } catch (e) {
     console.warn("NYC clock tick failed:", e);
   }
