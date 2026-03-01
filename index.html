@@ -136,37 +136,48 @@
       font-weight: 700;
     }
 
-    /* ---------- Bottom slider (thin + ALWAYS visible with safe-area) ---------- */
+    /* ---------- Bottom slider (THINNER + LOWERED) ---------- */
     .sliderWrap {
       position: absolute;
       left: 10px;
       right: 10px;
-      bottom: calc(10px + env(safe-area-inset-bottom));
+
+      /* CHANGED: lowered a bit more (closer to bottom) */
+      bottom: calc(4px + env(safe-area-inset-bottom));
+
       z-index: 1000;
       background: rgba(255,255,255,0.92);
       border-radius: 14px;
       box-shadow: 0 6px 18px rgba(0,0,0,0.15);
-      padding: 6px 10px;
+
+      /* CHANGED: ~50% thinner */
+      padding: 3px 10px;
+
       font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
     }
+
+    /* CHANGED: slightly smaller to reduce total height (keeps same style) */
     .timeLabel {
-      font-size: 16px;
+      font-size: 14px;
       font-weight: 950;
-      margin: 0 0 4px 0;
+      margin: 0 0 2px 0;
+      line-height: 1.05;
     }
 
-    /* MAIN slider (keep as-is) */
+    /* CHANGED: thinner track area */
     input[type="range"] {
       width: 100%;
-      height: 18px;
+      height: 12px;
       margin: 0;
     }
 
+    /* CHANGED: tighter spacing */
     .centerBtnInBar{
-      margin-top: 6px;
+      margin-top: 3px;
       display:flex;
       justify-content:flex-end;
     }
+
     .toggleBtnSmall{
       border:none;
       border-radius: 999px;
@@ -228,6 +239,9 @@
 
     /* =========================================================
        GPS ARROW (UPDATED: more pointed “direction” look)
+       - Longer, narrower triangle (reads as a forward pointer)
+       - Inner highlight wedge helps your eyes see the “front”
+       - Rotation still handled by app.js via transform on #navWrap
        ========================================================= */
     .navArrowWrap{
       width: 34px;
@@ -237,6 +251,7 @@
       will-change: transform, filter, box-shadow;
     }
 
+    /* Main arrow body (tall + narrow) */
     .navArrow{
       position: absolute;
       left: 50%;
@@ -246,10 +261,11 @@
       transform: translate(-50%, -62%);
       border-left: 6px solid transparent;
       border-right: 6px solid transparent;
-      border-bottom: 26px solid #111;
+      border-bottom: 26px solid #111; /* longer = more “pointed forward” */
       filter: drop-shadow(0 2px 2px rgba(0,0,0,0.35));
     }
 
+    /* Inner “nose” highlight to emphasize direction */
     .navArrow::after{
       content:"";
       position:absolute;
@@ -263,6 +279,7 @@
       border-bottom: 14px solid rgba(255,255,255,0.25);
     }
 
+    /* Slight base cap to look less like a perfect triangle */
     .navArrow::before{
       content:"";
       position:absolute;
