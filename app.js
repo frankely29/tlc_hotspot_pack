@@ -52,15 +52,15 @@ const LS_KEY_MANHATTAN = "manhattan_mode_enabled";
 
 // Manhattan adjusted rating uses percentiles inside Manhattan ONLY:
 // score = (PAY_WEIGHT * payPercentile) + (VOL_WEIGHT * pickupPercentile)
-const MANHATTAN_PAY_WEIGHT = 0.65;   // higher = favor higher pay zones in Manhattan more
-const MANHATTAN_VOL_WEIGHT = 0.35;   // lower = de-emphasize pure demand (saturation risk proxy)
+const MANHATTAN_PAY_WEIGHT = 0.60;   // higher = favor higher pay zones in Manhattan more
+const MANHATTAN_VOL_WEIGHT = 0.40;   // lower = de-emphasize pure demand (saturation risk proxy)
 
 // Optional penalty to gently push Manhattan down overall when mode is ON.
 // Example 0.90 = 10% penalty, 0.85 = 15% penalty.
-const MANHATTAN_GLOBAL_PENALTY = 0.90;
+const MANHATTAN_GLOBAL_PENALTY = 0.95;
 
 // Minimum Manhattan zones in frame needed to compute percentiles reliably
-const MANHATTAN_MIN_ZONES = 6;
+const MANHATTAN_MIN_ZONES = 10;
 
 /* =========================================================
    MANHATTAN MODE — UPTOWN EXCLUSION (ONLY CHANGE)
