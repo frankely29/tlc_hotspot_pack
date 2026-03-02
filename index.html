@@ -20,31 +20,14 @@
 
   <style>
     html, body { height: 100%; margin: 0; padding: 0; }
-    #map { height: 100vh; width: 100vw; }
+    #map { height: 100vh; width: 100vw; position: relative; }
 
-    /* =========================================================
-       WEATHER FX OVERLAY (NEW)
-       - Canvas sits above map + labels, below UI panels
-       ========================================================= */
-    #wxCanvas{
+    /* ===== FULL-MAP WEATHER FX CANVAS (covers the whole map) ===== */
+    #weatherFx {
       position: absolute;
       inset: 0;
-      z-index: 700; /* above overlays (400/650) but below legend/slider (1000) */
-      pointer-events: none;
-    }
-
-    /* =========================================================
-       NIGHT THEME (NEW)
-       - We darken the map tiles only (NOT the UI)
-       - This is a visual effect only; no tile changes needed
-       ========================================================= */
-    body.night .leaflet-tile-pane{
-      filter: brightness(0.65) contrast(1.08) saturate(0.85);
-    }
-
-    /* OPTIONAL: subtle “sunny” lift on day */
-    body.sunny .leaflet-tile-pane{
-      filter: brightness(1.03) saturate(1.08);
+      z-index: 650;            /* above tiles/overlays, below tooltips if needed */
+      pointer-events: none;    /* never blocks touches */
     }
 
     /* ---------- Legend (small + minimize) ---------- */
@@ -161,65 +144,72 @@
       font-weight: 700;
     }
 
-    /* =========================================================
-       Bottom slider (keep your layout) + Weather badge (NEW)
-       - Weather badge is small and stays inside bottom box
-       ========================================================= */
+    /* ---------- Bottom slider (thinner + slightly lower) ---------- */
     .sliderWrap {
       position: absolute;
       left: 10px;
       right: 10px;
-      bottom: calc(6px + env(safe-area-inset-bottom));
+      bottom: calc(6px + env(safe-area-inset-bottom)); /* a little lower */
       z-index: 1000;
       background: rgba(255,255,255,0.92);
       border-radius: 14px;
       box-shadow: 0 6px 18px rgba(0,0,0,0.15);
-      padding: 6px 10px;
+      padding: 4px 10px;  /* thinner (about ~30% less vertical padding) */
       font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
     }
-    .timeLabel {
-      font-size: 16px;
-      font-weight: 950;
-      margin: 0 0 4px 0;
-    }
 
-    /* NEW: row above slider for small weather indicator */
+    /* Header row inside slider box: time left, weather right */
     .sliderTopRow{
       display:flex;
       align-items:center;
       justify-content:space-between;
-      gap:10px;
-      margin-bottom: 4px;
+      gap:8px;
+      margin: 0 0 2px 0;
     }
 
-    /* NEW: weather badge */
-    .weatherBadge{
-      display:inline-flex;
+    .timeLabel {
+      font-size: 14px; /* slightly smaller so box stays thin */
+      font-weight: 950;
+      margin: 0;
+      line-height: 1.05;
+    }
+
+    /* Weather chip (professional look) */
+    .wxChip{
+      display:flex;
       align-items:center;
       gap:6px;
-      padding: 3px 8px;
+      padding: 4px 8px;
       border-radius: 999px;
-      border: 1px solid rgba(0,0,0,0.14);
-      background: rgba(255,255,255,0.80);
-      font-size: 11px;
+      border: 1px solid rgba(0,0,0,0.12);
+      background: rgba(255,255,255,0.75);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.10);
       font-weight: 900;
-      opacity: 0.95;
+      font-size: 11px;
       white-space: nowrap;
-      max-width: 46vw;
-      overflow: hidden;
-      text-overflow: ellipsis;
     }
-    .weatherBadge .wxIcon{ font-size: 12px; }
-    .weatherBadge .wxTxt{ opacity: 0.9; }
+    .wxDot{
+      width:8px;
+      height:8px;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.25);
+    }
+    .wxChip.night{
+      background: rgba(15,18,25,0.65);
+      border-color: rgba(255,255,255,0.12);
+      color: rgba(255,255,255,0.92);
+    }
+    .wxChip.night .wxDot{ background: rgba(255,255,255,0.35); }
 
+    /* Slider track thinner */
     input[type="range"] {
       width: 100%;
-      height: 18px;
+      height: 14px; /* thinner */
       margin: 0;
     }
 
     .centerBtnInBar{
-      margin-top: 6px;
+      margin-top: 4px; /* thinner */
       display:flex;
       justify-content:flex-end;
     }
@@ -237,7 +227,7 @@
     .toggleBtnSmall.on { outline: 2px solid rgba(0,160,255,0.45); }
     .toggleBtnSmall:active { transform: scale(0.98); }
 
-    /* ---------- Zone labels ---------- */
+    /* ---------- Zone labels (your small borough text is by design) ---------- */
     .zone-label {
       background: transparent;
       border: none;
@@ -282,9 +272,7 @@
     .leaflet-tooltip-pane { z-index: 650 !important; }
     .leaflet-overlay-pane { z-index: 400 !important; }
 
-    /* =========================================================
-       GPS ARROW (your current)
-       ========================================================= */
+    /* GPS arrow (unchanged) */
     .navArrowWrap{
       width: 34px;
       height: 34px;
@@ -334,7 +322,6 @@
         drop-shadow(0 0 6px rgba(0,160,255,0.95))
         drop-shadow(0 0 12px rgba(0,160,255,0.75));
     }
-
     @keyframes pulseRing {
       0%   { transform: translate(-50%, -50%) scale(0.8); opacity: 0.75; }
       70%  { transform: translate(-50%, -50%) scale(1.25); opacity: 0.05; }
@@ -357,10 +344,10 @@
 </head>
 
 <body>
-  <div id="map"></div>
-
-  <!-- NEW: weather canvas overlay -->
-  <canvas id="wxCanvas"></canvas>
+  <div id="map">
+    <!-- Full-map rain/snow overlay -->
+    <canvas id="weatherFx"></canvas>
+  </div>
 
   <div id="legend" class="legend" aria-label="Demand legend">
     <div class="legendHeader">
@@ -391,12 +378,14 @@
   </div>
 
   <div class="sliderWrap">
-    <!-- NEW: time + weather in same row -->
+    <!-- Professional top row: time label + weather chip -->
     <div class="sliderTopRow">
       <div id="timeLabel" class="timeLabel">Loading…</div>
-      <div id="weatherBadge" class="weatherBadge" title="Local weather">
-        <span class="wxIcon">⛅</span>
-        <span class="wxTxt">Weather…</span>
+
+      <!-- Weather chip (populated by app.js) -->
+      <div id="wxChip" class="wxChip" title="NYC Weather">
+        <span class="wxDot"></span>
+        <span id="wxText">Weather…</span>
       </div>
     </div>
 
