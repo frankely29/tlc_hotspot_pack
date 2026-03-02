@@ -47,9 +47,9 @@ const USER_SLIDER_GRACE_MS = 25 * 1000;
    MANHATTAN MODE — DEFAULT SETTINGS (SAFE TO EDIT)
    ========================================================= */
 const LS_KEY_MANHATTAN = "manhattan_mode_enabled";
-const MANHATTAN_PAY_WEIGHT = 0.55;
-const MANHATTAN_VOL_WEIGHT = 0.45;
-const MANHATTAN_GLOBAL_PENALTY = 0.98;
+const MANHATTAN_PAY_WEIGHT = 0.52;
+const MANHATTAN_VOL_WEIGHT = 0.48;
+const MANHATTAN_GLOBAL_PENALTY = 0.99;
 const MANHATTAN_MIN_ZONES = 10;
 
 /* =========================================================
