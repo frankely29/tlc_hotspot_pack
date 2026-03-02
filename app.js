@@ -1,27 +1,12 @@
 /* =========================================================
    NYC TLC Hotspot Map (Frontend) - SIMPLE + STABLE
-   ---------------------------------------------------------
-   GOALS:
-   1) Keep your original map zoom behavior (NO forced zoom-in changes)
-   2) Keep Auto-center stable: ON follows you, OFF lets you explore
-   3) Keep page updating in Safari without manual refresh:
-      - every 60s: if NYC moved to a new 20-min bin -> move slider + load frame
-      - every 5 min: refresh the current frame (same index)
-
-   =========================================================
-   MANHATTAN MODE — Midtown + Lower ONLY (NOT Uptown)
    ========================================================= */
 
 const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
 const BIN_MINUTES = 20;
 
-// Refresh current frame every 5 minutes (re-fetch same slider idx)
 const REFRESH_MS = 5 * 60 * 1000;
-
-// NYC clock tick: check if the correct 20-min window changed
 const NYC_CLOCK_TICK_MS = 60 * 1000;
-
-// If user recently touched slider, don't auto-advance for a bit
 const USER_SLIDER_GRACE_MS = 25 * 1000;
 
 /* =========================================================
@@ -29,18 +14,15 @@ const USER_SLIDER_GRACE_MS = 25 * 1000;
    ========================================================= */
 const LS_KEY_MANHATTAN = "manhattan_mode_enabled";
 
-// Less strict Manhattan Mode (your current choice)
+// (your current values)
 const MANHATTAN_PAY_WEIGHT = 0.55;
 const MANHATTAN_VOL_WEIGHT = 0.45;
-
-// Optional penalty
 const MANHATTAN_GLOBAL_PENALTY = 0.98;
 
-// Minimum Manhattan zones in frame needed to compute percentiles reliably
-// (you said you set 40 — keep it if that's what you want)
+// NOTE: you said you set 40. Keep it if that's what you want.
 const MANHATTAN_MIN_ZONES = 40;
 
-// ~96th St-ish cutoff (excludes Harlem / Inwood / Wash Heights / etc)
+// Uptown exclusion
 const MANHATTAN_CORE_MAX_LAT = 40.795;
 
 /* =========================================================
@@ -74,7 +56,7 @@ function shouldShowLabel(bucket, zoom) {
 }
 
 /* =========================================================
-   Time helpers (backend timeline is "no TZ" ISO strings)
+   Time helpers
    ========================================================= */
 function parseIsoNoTz(iso) {
   const [d, t] = iso.split("T");
@@ -85,8 +67,8 @@ function parseIsoNoTz(iso) {
 function dowMon0FromIso(iso) {
   const { Y, M, D, h, m, s } = parseIsoNoTz(iso);
   const dt = new Date(Date.UTC(Y, M - 1, D, h, m, s));
-  const dowSun0 = dt.getUTCDay(); // 0=Sun..6=Sat
-  return dowSun0 === 0 ? 6 : dowSun0 - 1; // Mon=0..Sun=6
+  const dowSun0 = dt.getUTCDay();
+  return dowSun0 === 0 ? 6 : dowSun0 - 1;
 }
 function minuteOfWeekFromIso(iso) {
   const { h, m } = parseIsoNoTz(iso);
@@ -102,8 +84,6 @@ function formatNYCLabel(iso) {
   const mm = String(m).padStart(2, "0");
   return `${names[dow_m]} ${hr12}:${mm} ${ampm}`;
 }
-
-// Get NYC minute-of-week rounded DOWN to current BIN_MINUTES bucket
 function getNowNYCMinuteOfWeekRounded() {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
@@ -125,12 +105,10 @@ function getNowNYCMinuteOfWeekRounded() {
   const total = dow_m * 1440 + hour * 60 + minute;
   return Math.floor(total / BIN_MINUTES) * BIN_MINUTES;
 }
-
 function cyclicDiff(a, b, mod) {
   const d = Math.abs(a - b);
   return Math.min(d, mod - d);
 }
-
 function pickClosestIndex(minutesOfWeekArr, target) {
   let bestIdx = 0;
   let bestDiff = Infinity;
@@ -210,7 +188,7 @@ function isStatenIslandFeature(props) {
 }
 
 /* =========================================================
-   Manhattan Mode (pay-weight Manhattan-only recolor)
+   Manhattan Mode
    ========================================================= */
 let manhattanMode = (localStorage.getItem(LS_KEY_MANHATTAN) || "0") === "1";
 
@@ -220,7 +198,7 @@ function isManhattanFeature(props) {
 }
 
 /* =========================================================
-   Accurate polygon centroid (area-weighted)
+   FIX: Accurate polygon centroid (area-weighted)
    ========================================================= */
 function ringCentroidArea(ring) {
   if (!Array.isArray(ring) || ring.length < 3) return null;
@@ -232,7 +210,10 @@ function ringCentroidArea(ring) {
     pts.push([first[0], first[1]]);
   }
 
-  let A = 0, Cx = 0, Cy = 0;
+  let A = 0;
+  let Cx = 0;
+  let Cy = 0;
+
   for (let i = 0; i < pts.length - 1; i++) {
     const [x0, y0] = pts[i];
     const [x1, y1] = pts[i + 1];
@@ -241,6 +222,7 @@ function ringCentroidArea(ring) {
     Cx += (x0 + x1) * cross;
     Cy += (y0 + y1) * cross;
   }
+
   if (Math.abs(A) < 1e-12) return null;
   const inv = 1 / (3 * A);
   return { lng: Cx * inv, lat: Cy * inv, area2: A };
@@ -248,6 +230,7 @@ function ringCentroidArea(ring) {
 function polygonCentroid(geom) {
   const rings = geom?.coordinates;
   if (!Array.isArray(rings) || rings.length === 0) return null;
+
   const outer = ringCentroidArea(rings[0]);
   if (!outer) return null;
 
@@ -270,7 +253,10 @@ function multiPolygonCentroid(geom) {
   const polys = geom?.coordinates;
   if (!Array.isArray(polys) || polys.length === 0) return null;
 
-  let sumArea2 = 0, sumLat = 0, sumLng = 0;
+  let sumArea2 = 0;
+  let sumLat = 0;
+  let sumLng = 0;
+
   for (const poly of polys) {
     const c = polygonCentroid({ type: "Polygon", coordinates: poly });
     if (!c) continue;
@@ -282,6 +268,7 @@ function multiPolygonCentroid(geom) {
     sumLat += c.lat * w;
     sumLng += c.lng * w;
   }
+
   if (Math.abs(sumArea2) < 1e-12) return null;
   return { lat: sumLat / sumArea2, lng: sumLng / sumArea2 };
 }
@@ -293,7 +280,7 @@ function geometryCenter(geom) {
 }
 
 /* =========================================================
-   Midtown + Lower Manhattan ONLY
+   Manhattan core zone check (Uptown exclusion)
    ========================================================= */
 function isCoreManhattan(props, geom) {
   if (!isManhattanFeature(props)) return false;
@@ -303,7 +290,7 @@ function isCoreManhattan(props, geom) {
 }
 
 /* =========================================================
-   Manhattan Mode button (create if missing)
+   Manhattan button (create dynamically)
    ========================================================= */
 function ensureManhattanButton() {
   let btn = document.getElementById("btnManhattan");
@@ -335,6 +322,7 @@ function ensureManhattanButton() {
   } else {
     document.body.appendChild(btn);
   }
+
   return btn;
 }
 
@@ -354,7 +342,6 @@ if (btnManhattan) {
   btnManhattan.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
-
     manhattanMode = !manhattanMode;
     localStorage.setItem(LS_KEY_MANHATTAN, manhattanMode ? "1" : "0");
     syncManhattanUI();
@@ -422,11 +409,12 @@ function applyStatenLocalView(frame) {
     props.si_local_bucket = bucket;
     props.si_local_color = color;
   }
+
   return frame;
 }
 
 /* =========================================================
-   Manhattan local view (CORE Manhattan only)
+   Manhattan Mode — local view (core Manhattan only)
    ========================================================= */
 function applyManhattanLocalView(frame) {
   const feats = frame?.polygons?.features || [];
@@ -538,7 +526,7 @@ if (btnStatenIsland) {
 }
 
 /* =========================================================
-   Effective bucket/color/rating selection
+   Effective selection helpers
    ========================================================= */
 function effectiveBucket(props, geom) {
   if (statenIslandMode && isStatenIslandFeature(props) && props.si_local_bucket) return props.si_local_bucket;
@@ -722,8 +710,6 @@ let geoLayer = null;
 let timeline = [];
 let minutesOfWeek = [];
 let currentFrame = null;
-
-// Track user slider touches so we don't fight them
 let lastUserSliderTs = 0;
 
 function buildPopupHTML(props, geom) {
@@ -824,18 +810,9 @@ async function loadTimeline() {
   slider.max = String(timeline.length - 1);
   slider.step = "1";
 
-  // ---- Precision slider sync (RESTORED FEATURE) ----
-  if (preciseSliderEl) {
-    preciseSliderEl.min = slider.min;
-    preciseSliderEl.max = slider.max;
-    preciseSliderEl.step = slider.step;
-  }
-
   const nowMinWeek = getNowNYCMinuteOfWeekRounded();
   const idx = pickClosestIndex(minutesOfWeek, nowMinWeek);
   slider.value = String(idx);
-
-  if (preciseSliderEl) preciseSliderEl.value = slider.value;
 
   await loadFrame(idx);
 }
@@ -844,114 +821,16 @@ map.on("zoomend", () => {
   if (currentFrame) renderFrame(currentFrame);
 });
 
-/* =========================================================
-   Slider manual control (debounced) — keeps your behavior
-   ========================================================= */
 let sliderDebounce = null;
-
-function scheduleLoadFromSliderValue(v) {
+slider.addEventListener("input", () => {
   lastUserSliderTs = Date.now();
-  const idx = Number(v);
+  const idx = Number(slider.value);
   if (sliderDebounce) clearTimeout(sliderDebounce);
   sliderDebounce = setTimeout(() => loadFrame(idx).catch(console.error), 80);
-}
-
-slider.addEventListener("input", () => {
-  scheduleLoadFromSliderValue(slider.value);
 });
 
 /* =========================================================
-   PRECISION SLIDER POPUP (RESTORED FEATURE)
-   - Does NOT change your week slider
-   - Just gives a pro fine-control overlay
-   ========================================================= */
-const preciseOverlayEl = document.getElementById("preciseOverlay");
-const preciseSliderEl = document.getElementById("preciseSlider");
-const preciseTimeEl = document.getElementById("preciseTime");
-const preciseCloseEl = document.getElementById("preciseClose");
-const stepBackEl = document.getElementById("stepBack");
-const stepFwdEl = document.getElementById("stepFwd");
-const stepBackBigEl = document.getElementById("stepBackBig");
-const stepFwdBigEl = document.getElementById("stepFwdBig");
-
-function clampIdx(v) {
-  const min = Number(slider.min || "0");
-  const max = Number(slider.max || "0");
-  return Math.max(min, Math.min(max, v));
-}
-
-function setBothSliders(idx) {
-  const v = String(clampIdx(idx));
-  slider.value = v;
-  if (preciseSliderEl) preciseSliderEl.value = v;
-  // Update label inside overlay using timeline (if ready)
-  if (timeline.length && preciseTimeEl) {
-    const iso = timeline[Number(v)];
-    if (iso) preciseTimeEl.textContent = formatNYCLabel(iso);
-  }
-}
-
-function showPreciseOverlay() {
-  if (!preciseOverlayEl) return;
-  preciseOverlayEl.classList.add("show");
-  preciseOverlayEl.setAttribute("aria-hidden", "false");
-}
-
-function hidePreciseOverlay() {
-  if (!preciseOverlayEl) return;
-  preciseOverlayEl.classList.remove("show");
-  preciseOverlayEl.setAttribute("aria-hidden", "true");
-}
-
-function openPreciseFromMainSlider() {
-  // Sync values + label
-  setBothSliders(Number(slider.value));
-  showPreciseOverlay();
-}
-
-function stepBy(delta) {
-  const cur = Number(slider.value || "0");
-  const next = clampIdx(cur + delta);
-  setBothSliders(next);
-  scheduleLoadFromSliderValue(String(next));
-}
-
-if (preciseOverlayEl) {
-  // Tap outside the card closes
-  preciseOverlayEl.addEventListener("click", (e) => {
-    if (e.target === preciseOverlayEl) hidePreciseOverlay();
-  });
-}
-if (preciseCloseEl) preciseCloseEl.addEventListener("click", hidePreciseOverlay);
-
-if (stepBackEl) stepBackEl.addEventListener("click", () => stepBy(-1));
-if (stepFwdEl) stepFwdEl.addEventListener("click", () => stepBy(+1));
-
-// 2 hours = 6 bins (20 min each)
-if (stepBackBigEl) stepBackBigEl.addEventListener("click", () => stepBy(-6));
-if (stepFwdBigEl) stepFwdBigEl.addEventListener("click", () => stepBy(+6));
-
-if (preciseSliderEl) {
-  preciseSliderEl.addEventListener("input", () => {
-    // Keep main slider synced
-    setBothSliders(Number(preciseSliderEl.value));
-    scheduleLoadFromSliderValue(preciseSliderEl.value);
-  });
-}
-
-/* IMPORTANT:
-   - We open precise overlay on pointerdown (best for iPhone)
-   - We DO NOT block normal slider use; you can still drag normally
-*/
-slider.addEventListener("pointerdown", () => {
-  openPreciseFromMainSlider();
-});
-slider.addEventListener("touchstart", () => {
-  openPreciseFromMainSlider();
-}, { passive: true });
-
-/* =========================================================
-   Auto-center button (stable)
+   Auto-center
    ========================================================= */
 const btnCenter = document.getElementById("btnCenter");
 let autoCenter = true;
@@ -1019,13 +898,11 @@ function setNavVisual(isMoving) {
   el.classList.toggle("navMoving", !!isMoving);
   el.classList.toggle("navPulse", !isMoving);
 }
-
 function setNavRotation(deg) {
   const el = document.getElementById("navWrap");
   if (!el) return;
   el.style.transform = `rotate(${deg}deg)`;
 }
-
 function computeBearingDeg(from, to) {
   const toRad = (x) => (x * Math.PI) / 180;
   const toDeg = (x) => (x * 180) / Math.PI;
@@ -1099,6 +976,9 @@ function startLocationWatch() {
       }
 
       if (currentFrame) updateRecommendation(currentFrame);
+
+      // NEW: refresh weather faster once we have real user location
+      scheduleWeatherUpdateSoon();
     },
     (err) => {
       console.warn("Geolocation error:", err);
@@ -1120,7 +1000,7 @@ function startLocationWatch() {
 }
 
 /* =========================================================
-   AUTO-UPDATE (no manual refresh needed)
+   AUTO-UPDATE
    ========================================================= */
 async function refreshCurrentFrame() {
   try {
@@ -1144,8 +1024,6 @@ async function tickNYCClockAndAdvanceIfNeeded() {
     if (bestIdx === curIdx) return;
 
     slider.value = String(bestIdx);
-    if (preciseSliderEl) preciseSliderEl.value = slider.value;
-
     await loadFrame(bestIdx);
   } catch (e) {
     console.warn("NYC clock tick failed:", e);
@@ -1157,8 +1035,304 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     refreshCurrentFrame().catch(() => {});
     tickNYCClockAndAdvanceIfNeeded().catch(() => {});
+    updateWeatherNow().catch(() => {});
   }
 });
+
+/* =========================================================
+   NEW: WEATHER BADGE + FX (no API key)
+   - Uses Open-Meteo current weather
+   - Drives: badge text + rain/snow particles + night theme
+   ========================================================= */
+const weatherBadge = document.getElementById("weatherBadge");
+const wxCanvas = document.getElementById("wxCanvas");
+const wxCtx = wxCanvas ? wxCanvas.getContext("2d") : null;
+
+let wxState = {
+  kind: "none", // "none" | "rain" | "snow"
+  intensity: 0, // 0..1
+  isNight: false,
+  tempF: null,
+  label: "Weather…",
+  lastLat: null,
+  lastLng: null,
+};
+
+let wxParticles = [];
+let wxAnimRunning = false;
+let wxNextUpdateTimer = null;
+
+// Resize canvas to full screen
+function wxResizeCanvas() {
+  if (!wxCanvas) return;
+  const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  wxCanvas.width = Math.floor(window.innerWidth * dpr);
+  wxCanvas.height = Math.floor(window.innerHeight * dpr);
+  wxCanvas.style.width = `${window.innerWidth}px`;
+  wxCanvas.style.height = `${window.innerHeight}px`;
+  if (wxCtx) wxCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener("resize", wxResizeCanvas);
+wxResizeCanvas();
+
+// Simple mapping from Open-Meteo weather_code
+function wxDescribe(code) {
+  // Minimal set (enough to choose effects)
+  // 0 clear, 1-3 mainly clear/partly cloudy/overcast
+  // 45-48 fog
+  // 51-57 drizzle, 61-67 rain, 80-82 rain showers
+  // 71-77 snow, 85-86 snow showers
+  // 95-99 thunderstorm
+  const c = Number(code);
+  if (c === 0) return { text: "Clear", icon: "☀️", kind: "none", intensity: 0 };
+  if (c >= 1 && c <= 3) return { text: "Cloudy", icon: "⛅", kind: "none", intensity: 0 };
+  if (c === 45 || c === 48) return { text: "Fog", icon: "🌫️", kind: "none", intensity: 0 };
+  if ((c >= 51 && c <= 57) || (c >= 61 && c <= 67) || (c >= 80 && c <= 82)) {
+    // rain / drizzle
+    const intensity = (c >= 65 || c >= 81) ? 0.85 : (c >= 63 ? 0.65 : 0.45);
+    return { text: "Rain", icon: "🌧️", kind: "rain", intensity };
+  }
+  if ((c >= 71 && c <= 77) || (c >= 85 && c <= 86)) {
+    const intensity = (c >= 75 || c >= 86) ? 0.85 : 0.6;
+    return { text: "Snow", icon: "❄️", kind: "snow", intensity };
+  }
+  if (c >= 95 && c <= 99) return { text: "Storm", icon: "⛈️", kind: "rain", intensity: 0.95 };
+  return { text: "Weather", icon: "⛅", kind: "none", intensity: 0 };
+}
+
+function fFromC(c) {
+  if (!Number.isFinite(c)) return null;
+  return (c * 9) / 5 + 32;
+}
+
+function setBodyTheme({ isNight, isSunny }) {
+  document.body.classList.toggle("night", !!isNight);
+  document.body.classList.toggle("sunny", !!isSunny && !isNight);
+}
+
+function setWeatherBadge(icon, text) {
+  if (!weatherBadge) return;
+  const iconEl = weatherBadge.querySelector(".wxIcon");
+  const txtEl = weatherBadge.querySelector(".wxTxt");
+  if (iconEl) iconEl.textContent = icon;
+  if (txtEl) txtEl.textContent = text;
+  weatherBadge.title = text;
+}
+
+function getWeatherLatLng() {
+  // Prefer user location if available; fallback to NYC center
+  const lat = userLatLng?.lat ?? 40.7128;
+  const lng = userLatLng?.lng ?? -74.0060;
+  return { lat, lng };
+}
+
+// Throttle helper: if we just updated recently, don’t spam
+function scheduleWeatherUpdateSoon() {
+  if (wxNextUpdateTimer) return;
+  wxNextUpdateTimer = setTimeout(() => {
+    wxNextUpdateTimer = null;
+    updateWeatherNow().catch(() => {});
+  }, 2500);
+}
+
+// Main fetch (Open-Meteo; no key)
+async function updateWeatherNow() {
+  const { lat, lng } = getWeatherLatLng();
+
+  // If location didn't change much, we can skip frequent refetch
+  const samePlace =
+    wxState.lastLat != null &&
+    wxState.lastLng != null &&
+    Math.abs(wxState.lastLat - lat) < 0.05 &&
+    Math.abs(wxState.lastLng - lng) < 0.05;
+
+  // If same place and badge already filled, don't update too aggressively
+  if (samePlace && wxState.tempF != null && wxState.label && Date.now() % 2 === 0) {
+    // tiny jittered skip; keeps it light
+  }
+
+  wxState.lastLat = lat;
+  wxState.lastLng = lng;
+
+  const url =
+    `https://api.open-meteo.com/v1/forecast` +
+    `?latitude=${encodeURIComponent(lat)}` +
+    `&longitude=${encodeURIComponent(lng)}` +
+    `&current=temperature_2m,weather_code,is_day` +
+    `&timezone=America%2FNew_York`;
+
+  try {
+    const data = await fetchJSON(url);
+    const cur = data?.current || {};
+    const tempC = Number(cur.temperature_2m ?? NaN);
+    const tempF = fFromC(tempC);
+    const code = cur.weather_code;
+    const isDay = Number(cur.is_day ?? 1) === 1;
+
+    const desc = wxDescribe(code);
+    const label = `${desc.text}${tempF != null ? ` • ${Math.round(tempF)}°F` : ""}`;
+
+    wxState.tempF = tempF;
+    wxState.kind = desc.kind;
+    wxState.intensity = desc.intensity;
+    wxState.isNight = !isDay;
+    wxState.label = label;
+
+    // Theme toggles
+    setBodyTheme({ isNight: wxState.isNight, isSunny: desc.text === "Clear" });
+
+    // Badge
+    setWeatherBadge(desc.icon, label);
+
+    // FX
+    updateWxParticlesForState();
+    ensureWxAnimationRunning();
+  } catch (e) {
+    // Fail safely: keep app working
+    setWeatherBadge("⛅", "Weather unavailable");
+    // Don't force theme/effects if API fails
+  }
+}
+
+// Update every 10 minutes (light)
+setInterval(() => {
+  updateWeatherNow().catch(() => {});
+}, 10 * 60 * 1000);
+
+/* =========================================================
+   NEW: Canvas particle system (rain/snow)
+   - lightweight
+   - only runs when kind != "none"
+   ========================================================= */
+function updateWxParticlesForState() {
+  if (!wxCanvas || !wxCtx) return;
+
+  const kind = wxState.kind;
+  const intensity = wxState.intensity;
+
+  if (kind === "none" || intensity <= 0) {
+    wxParticles = [];
+    return;
+  }
+
+  // Particle count based on intensity + screen size
+  const base = Math.floor((window.innerWidth * window.innerHeight) / 45000);
+  const count = Math.max(40, Math.min(240, Math.floor(base * (kind === "rain" ? 2.4 : 1.6) * (0.6 + intensity))));
+
+  wxParticles = [];
+  for (let i = 0; i < count; i++) {
+    wxParticles.push(makeParticle(kind));
+  }
+}
+
+function makeParticle(kind) {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+
+  if (kind === "rain") {
+    return {
+      kind: "rain",
+      x: Math.random() * w,
+      y: Math.random() * h,
+      vx: -1.2 - Math.random() * 1.2,
+      vy: 10 + Math.random() * 10,
+      len: 10 + Math.random() * 14,
+      alpha: 0.12 + Math.random() * 0.12,
+      w: 1.0,
+    };
+  }
+
+  // snow
+  return {
+    kind: "snow",
+    x: Math.random() * w,
+    y: Math.random() * h,
+    vx: -0.7 + Math.random() * 1.4,
+    vy: 1.2 + Math.random() * 2.2,
+    r: 1.0 + Math.random() * 2.2,
+    alpha: 0.14 + Math.random() * 0.18,
+    drift: Math.random() * Math.PI * 2,
+  };
+}
+
+function stepParticles() {
+  if (!wxCanvas || !wxCtx) return;
+
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+
+  wxCtx.clearRect(0, 0, w, h);
+
+  const intensity = wxState.intensity;
+
+  if (wxState.kind === "rain") {
+    wxCtx.lineCap = "round";
+    for (const p of wxParticles) {
+      wxCtx.globalAlpha = p.alpha * (0.7 + intensity);
+      wxCtx.lineWidth = p.w;
+
+      wxCtx.beginPath();
+      wxCtx.moveTo(p.x, p.y);
+      wxCtx.lineTo(p.x + p.vx, p.y + p.len);
+      wxCtx.strokeStyle = "#0a3d66";
+      wxCtx.stroke();
+
+      p.x += p.vx * (0.9 + intensity);
+      p.y += p.vy * (0.85 + intensity);
+
+      if (p.y > h + 30 || p.x < -30) {
+        p.x = Math.random() * w;
+        p.y = -20 - Math.random() * 200;
+      }
+    }
+    wxCtx.globalAlpha = 1;
+    return;
+  }
+
+  if (wxState.kind === "snow") {
+    for (const p of wxParticles) {
+      wxCtx.globalAlpha = p.alpha * (0.7 + intensity);
+      wxCtx.beginPath();
+      wxCtx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      wxCtx.fillStyle = "#ffffff";
+      wxCtx.fill();
+
+      p.drift += 0.03;
+      p.x += (p.vx + Math.sin(p.drift) * 0.6) * (0.7 + intensity);
+      p.y += p.vy * (0.7 + intensity);
+
+      if (p.y > h + 20) {
+        p.x = Math.random() * w;
+        p.y = -10 - Math.random() * 150;
+      }
+      if (p.x < -20) p.x = w + 10;
+      if (p.x > w + 20) p.x = -10;
+    }
+    wxCtx.globalAlpha = 1;
+  }
+}
+
+function ensureWxAnimationRunning() {
+  if (!wxCanvas || !wxCtx) return;
+
+  const shouldRun = (wxState.kind !== "none" && wxState.intensity > 0);
+  if (!shouldRun) {
+    wxAnimRunning = false;
+    wxCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+    return;
+  }
+  if (wxAnimRunning) return;
+
+  wxAnimRunning = true;
+
+  const loop = () => {
+    if (!wxAnimRunning) return;
+    stepParticles();
+    requestAnimationFrame(loop);
+  };
+
+  requestAnimationFrame(loop);
+}
 
 /* =========================================================
    Boot
@@ -1171,3 +1345,6 @@ loadTimeline().catch((err) => {
 });
 
 startLocationWatch();
+
+// NEW: first weather update immediately (NYC fallback if no GPS yet)
+updateWeatherNow().catch(() => {});
