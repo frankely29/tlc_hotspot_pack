@@ -20,15 +20,7 @@
 
   <style>
     html, body { height: 100%; margin: 0; padding: 0; }
-    #map { height: 100vh; width: 100vw; position: relative; }
-
-    /* ===== FULL-MAP WEATHER FX CANVAS (covers the whole map) ===== */
-    #weatherFx {
-      position: absolute;
-      inset: 0;
-      z-index: 650;            /* above tiles/overlays, below tooltips if needed */
-      pointer-events: none;    /* never blocks touches */
-    }
+    #map { height: 100vh; width: 100vw; }
 
     /* ---------- Legend (small + minimize) ---------- */
     .legend {
@@ -144,72 +136,32 @@
       font-weight: 700;
     }
 
-    /* ---------- Bottom slider (thinner + slightly lower) ---------- */
+    /* ---------- Bottom slider (YOUR CURRENT BASE) ---------- */
     .sliderWrap {
       position: absolute;
       left: 10px;
       right: 10px;
-      bottom: calc(6px + env(safe-area-inset-bottom)); /* a little lower */
+      bottom: calc(6px + env(safe-area-inset-bottom)); /* slightly lower */
       z-index: 1000;
       background: rgba(255,255,255,0.92);
       border-radius: 14px;
       box-shadow: 0 6px 18px rgba(0,0,0,0.15);
-      padding: 4px 10px;  /* thinner (about ~30% less vertical padding) */
+      padding: 4px 10px; /* thinner */
       font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
     }
-
-    /* Header row inside slider box: time left, weather right */
-    .sliderTopRow{
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap:8px;
+    .timeLabel {
+      font-size: 16px;
+      font-weight: 950;
       margin: 0 0 2px 0;
     }
-
-    .timeLabel {
-      font-size: 14px; /* slightly smaller so box stays thin */
-      font-weight: 950;
-      margin: 0;
-      line-height: 1.05;
-    }
-
-    /* Weather chip (professional look) */
-    .wxChip{
-      display:flex;
-      align-items:center;
-      gap:6px;
-      padding: 4px 8px;
-      border-radius: 999px;
-      border: 1px solid rgba(0,0,0,0.12);
-      background: rgba(255,255,255,0.75);
-      box-shadow: 0 2px 8px rgba(0,0,0,0.10);
-      font-weight: 900;
-      font-size: 11px;
-      white-space: nowrap;
-    }
-    .wxDot{
-      width:8px;
-      height:8px;
-      border-radius: 999px;
-      background: rgba(0,0,0,0.25);
-    }
-    .wxChip.night{
-      background: rgba(15,18,25,0.65);
-      border-color: rgba(255,255,255,0.12);
-      color: rgba(255,255,255,0.92);
-    }
-    .wxChip.night .wxDot{ background: rgba(255,255,255,0.35); }
-
-    /* Slider track thinner */
     input[type="range"] {
       width: 100%;
-      height: 14px; /* thinner */
+      height: 14px; /* thinner track area */
       margin: 0;
     }
 
     .centerBtnInBar{
-      margin-top: 4px; /* thinner */
+      margin-top: 4px;
       display:flex;
       justify-content:flex-end;
     }
@@ -227,7 +179,7 @@
     .toggleBtnSmall.on { outline: 2px solid rgba(0,160,255,0.45); }
     .toggleBtnSmall:active { transform: scale(0.98); }
 
-    /* ---------- Zone labels (your small borough text is by design) ---------- */
+    /* ---------- Zone labels ---------- */
     .zone-label {
       background: transparent;
       border: none;
@@ -267,12 +219,12 @@
     .zone-label.z14 .br { font-size: 0px; padding: 0; border: 0; }
     .zone-label.z15 .br { font-size: 03px; }
 
-    /* ---------- You arrow: force on top of EVERYTHING ---------- */
+    /* ---------- You arrow panes ---------- */
     .leaflet-marker-pane { z-index: 800 !important; }
     .leaflet-tooltip-pane { z-index: 650 !important; }
     .leaflet-overlay-pane { z-index: 400 !important; }
 
-    /* GPS arrow (unchanged) */
+    /* ---------- GPS arrow ---------- */
     .navArrowWrap{
       width: 34px;
       height: 34px;
@@ -340,14 +292,111 @@
       animation: pulseRing 1.5s ease-out infinite;
       pointer-events:none;
     }
+
+    /* =========================================================
+       PRECISION SLIDER POPUP (RESTORED FEATURE)
+       - Opens while sliding for fine control
+       - Bigger thumb + step buttons
+       - Does NOT remove the week slider (still there)
+       ========================================================= */
+    .preciseOverlay{
+      position: fixed;
+      inset: 0;
+      z-index: 5000;
+      display: none;
+      align-items: flex-end;
+      justify-content: center;
+      background: rgba(0,0,0,0.18);
+      backdrop-filter: blur(1px);
+      -webkit-backdrop-filter: blur(1px);
+      padding: 0 10px calc(10px + env(safe-area-inset-bottom));
+    }
+    .preciseOverlay.show{ display:flex; }
+
+    .preciseCard{
+      width: min(560px, 100%);
+      background: rgba(255,255,255,0.96);
+      border-radius: 16px;
+      box-shadow: 0 18px 40px rgba(0,0,0,0.22);
+      border: 1px solid rgba(0,0,0,0.10);
+      padding: 10px 12px 12px 12px;
+      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
+    }
+    .preciseTop{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      margin-bottom: 8px;
+    }
+    .preciseTitle{
+      font-weight: 950;
+      font-size: 12px;
+      opacity: 0.85;
+    }
+    .preciseTime{
+      font-weight: 950;
+      font-size: 13px;
+    }
+    .preciseClose{
+      border:none;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-weight: 950;
+      font-size: 12px;
+      background: rgba(0,0,0,0.06);
+      cursor:pointer;
+    }
+    .preciseClose:active{ transform: scale(0.98); }
+
+    .preciseSlider{
+      width: 100%;
+      height: 34px;
+      margin: 4px 0 8px 0;
+    }
+
+    .preciseControls{
+      display:flex;
+      gap:8px;
+      justify-content:space-between;
+      align-items:center;
+    }
+    .stepGroup{
+      display:flex;
+      gap:8px;
+      align-items:center;
+      flex-wrap:wrap;
+    }
+    .stepBtn{
+      border:none;
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-weight: 950;
+      font-size: 12px;
+      background: rgba(0,160,255,0.12);
+      color: #0b2a3a;
+      cursor:pointer;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .stepBtn.alt{
+      background: rgba(0,0,0,0.06);
+      color: #111;
+    }
+    .stepBtn:active{ transform: scale(0.98); }
+
+    .preciseHint{
+      font-size: 11px;
+      font-weight: 800;
+      opacity: 0.65;
+      text-align: right;
+      line-height: 1.1;
+    }
   </style>
 </head>
 
 <body>
-  <div id="map">
-    <!-- Full-map rain/snow overlay -->
-    <canvas id="weatherFx"></canvas>
-  </div>
+  <div id="map"></div>
 
   <div id="legend" class="legend" aria-label="Demand legend">
     <div class="legendHeader">
@@ -378,21 +427,37 @@
   </div>
 
   <div class="sliderWrap">
-    <!-- Professional top row: time label + weather chip -->
-    <div class="sliderTopRow">
-      <div id="timeLabel" class="timeLabel">Loading…</div>
-
-      <!-- Weather chip (populated by app.js) -->
-      <div id="wxChip" class="wxChip" title="NYC Weather">
-        <span class="wxDot"></span>
-        <span id="wxText">Weather…</span>
-      </div>
-    </div>
-
+    <div id="timeLabel" class="timeLabel">Loading…</div>
     <input id="slider" type="range" min="0" max="0" value="0" step="1" />
-
     <div class="centerBtnInBar">
       <button id="btnCenter" class="toggleBtnSmall on" type="button">Auto-center: ON</button>
+    </div>
+  </div>
+
+  <!-- =========================================================
+       Precision Slider Overlay (RESTORED FEATURE)
+       ========================================================= -->
+  <div id="preciseOverlay" class="preciseOverlay" aria-hidden="true">
+    <div class="preciseCard" role="dialog" aria-label="Precise timeline control">
+      <div class="preciseTop">
+        <div>
+          <div class="preciseTitle">Precise Time</div>
+          <div id="preciseTime" class="preciseTime">—</div>
+        </div>
+        <button id="preciseClose" class="preciseClose" type="button">Done</button>
+      </div>
+
+      <input id="preciseSlider" class="preciseSlider" type="range" min="0" max="0" value="0" step="1" />
+
+      <div class="preciseControls">
+        <div class="stepGroup">
+          <button id="stepBackBig" class="stepBtn alt" type="button">-2h</button>
+          <button id="stepBack" class="stepBtn" type="button">-20m</button>
+          <button id="stepFwd" class="stepBtn" type="button">+20m</button>
+          <button id="stepFwdBig" class="stepBtn alt" type="button">+2h</button>
+        </div>
+        <div class="preciseHint">Drag big slider<br/>or tap steps</div>
+      </div>
     </div>
   </div>
 
