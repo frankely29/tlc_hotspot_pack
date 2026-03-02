@@ -1,5 +1,7 @@
 /* =========================================================
    NYC TLC Hotspot Map (Frontend) - SIMPLE + STABLE
+   + Weather badge + rain/snow + day/night theme
+   + PRECISE SLIDER (RESTORED)
    ========================================================= */
 
 const RAILWAY_BASE = "https://web-production-78f67.up.railway.app";
@@ -19,7 +21,7 @@ const MANHATTAN_PAY_WEIGHT = 0.55;
 const MANHATTAN_VOL_WEIGHT = 0.45;
 const MANHATTAN_GLOBAL_PENALTY = 0.98;
 
-// NOTE: you said you set 40. Keep it if that's what you want.
+// You said you set 40. Keep it.
 const MANHATTAN_MIN_ZONES = 40;
 
 // Uptown exclusion
@@ -712,6 +714,217 @@ let minutesOfWeek = [];
 let currentFrame = null;
 let lastUserSliderTs = 0;
 
+/* =========================================================
+   PRECISE SLIDER (RESTORED)
+   ========================================================= */
+const preciseWrap = document.getElementById("preciseWrap");
+const preciseTitle = document.getElementById("preciseTitle");
+const preciseClose = document.getElementById("preciseClose");
+const preciseDay = document.getElementById("preciseDay");
+const preciseSlider = document.getElementById("preciseSlider");
+const preciseMinus = document.getElementById("preciseMinus");
+const precisePlus = document.getElementById("precisePlus");
+
+const DOW_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+// day -> list of global indices in that day
+let dayToIndices = [[], [], [], [], [], [], []];
+
+let preciseHideTimer = null;
+let preciseDebounce = null;
+
+function showPrecisePanel() {
+  if (!preciseWrap) return;
+  preciseWrap.classList.add("show");
+  if (preciseHideTimer) clearTimeout(preciseHideTimer);
+}
+function hidePrecisePanelSoon(ms = 650) {
+  if (!preciseWrap) return;
+  if (preciseHideTimer) clearTimeout(preciseHideTimer);
+  preciseHideTimer = setTimeout(() => {
+    preciseWrap.classList.remove("show");
+  }, ms);
+}
+function hidePrecisePanelNow() {
+  if (!preciseWrap) return;
+  if (preciseHideTimer) clearTimeout(preciseHideTimer);
+  preciseWrap.classList.remove("show");
+}
+
+function rebuildDayIndexMap() {
+  dayToIndices = [[], [], [], [], [], [], []];
+  for (let i = 0; i < timeline.length; i++) {
+    const iso = timeline[i];
+    const dow = dowMon0FromIso(iso);
+    dayToIndices[dow].push(i);
+  }
+}
+
+// Find which day and which position-within-day the global index belongs to
+function dayPosFromGlobalIndex(globalIdx) {
+  globalIdx = Math.max(0, Math.min(timeline.length - 1, globalIdx));
+  const iso = timeline[globalIdx];
+  const dow = dowMon0FromIso(iso);
+  const arr = dayToIndices[dow] || [];
+  // binary search index inside arr (arr is sorted)
+  let lo = 0, hi = arr.length - 1, best = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (arr[mid] <= globalIdx) { best = mid; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+  return { dow, pos: best };
+}
+
+// Set precise slider to match current main slider value
+function syncPreciseToMain() {
+  if (!timeline.length) return;
+  if (!preciseDay || !preciseSlider) return;
+
+  const globalIdx = Number(slider.value || "0");
+  const { dow, pos } = dayPosFromGlobalIndex(globalIdx);
+
+  preciseDay.value = String(dow);
+
+  const arr = dayToIndices[dow] || [];
+  preciseSlider.min = "0";
+  preciseSlider.max = String(Math.max(0, arr.length - 1));
+  preciseSlider.step = "1";
+  preciseSlider.value = String(Math.max(0, Math.min(arr.length - 1, pos)));
+
+  // Title line
+  const iso = timeline[globalIdx];
+  const label = formatNYCLabel(iso);
+  if (preciseTitle) preciseTitle.textContent = `Precise: ${label}`;
+}
+
+// When user changes day in precise panel, keep same “time position” as best-effort
+function onPreciseDayChanged() {
+  if (!timeline.length) return;
+  const dow = Number(preciseDay.value);
+  const arr = dayToIndices[dow] || [];
+
+  // If new day has no indices (shouldn't happen), bail
+  if (!arr.length) return;
+
+  // Reset to middle-ish of the day or closest to current time label
+  // We'll keep same minute-of-day if possible:
+  const globalIdx = Number(slider.value || "0");
+  const curIso = timeline[globalIdx];
+  const { h, m } = parseIsoNoTz(curIso);
+  const targetMinOfDay = h * 60 + m;
+
+  // pick closest in that day
+  let bestPos = 0;
+  let bestDiff = Infinity;
+  for (let p = 0; p < arr.length; p++) {
+    const iso = timeline[arr[p]];
+    const { h: hh, m: mm } = parseIsoNoTz(iso);
+    const diff = Math.abs((hh * 60 + mm) - targetMinOfDay);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      bestPos = p;
+    }
+  }
+
+  preciseSlider.min = "0";
+  preciseSlider.max = String(arr.length - 1);
+  preciseSlider.value = String(bestPos);
+
+  // Apply selection
+  applyPreciseSelection();
+}
+
+function applyPreciseSelection() {
+  const dow = Number(preciseDay.value);
+  const arr = dayToIndices[dow] || [];
+  if (!arr.length) return;
+
+  const pos = Number(preciseSlider.value || "0");
+  const clampedPos = Math.max(0, Math.min(arr.length - 1, pos));
+  const globalIdx = arr[clampedPos];
+
+  // Update main slider + load frame
+  slider.value = String(globalIdx);
+  lastUserSliderTs = Date.now();
+
+  if (preciseDebounce) clearTimeout(preciseDebounce);
+  preciseDebounce = setTimeout(() => {
+    loadFrame(globalIdx).catch(console.error);
+  }, 60);
+
+  // Title update
+  const iso = timeline[globalIdx];
+  const label = formatNYCLabel(iso);
+  if (preciseTitle) preciseTitle.textContent = `Precise: ${label}`;
+}
+
+/* Hook precise UI events */
+if (preciseClose) {
+  preciseClose.addEventListener("click", (e) => {
+    e.preventDefault();
+    hidePrecisePanelNow();
+  });
+}
+if (preciseDay) {
+  preciseDay.addEventListener("change", () => {
+    showPrecisePanel();
+    onPreciseDayChanged();
+  });
+}
+if (preciseSlider) {
+  preciseSlider.addEventListener("input", () => {
+    showPrecisePanel();
+    applyPreciseSelection();
+  });
+}
+if (preciseMinus) {
+  preciseMinus.addEventListener("click", () => {
+    showPrecisePanel();
+    const v = Number(preciseSlider.value || "0");
+    preciseSlider.value = String(Math.max(Number(preciseSlider.min || "0"), v - 1));
+    applyPreciseSelection();
+  });
+}
+if (precisePlus) {
+  precisePlus.addEventListener("click", () => {
+    showPrecisePanel();
+    const v = Number(preciseSlider.value || "0");
+    preciseSlider.value = String(Math.min(Number(preciseSlider.max || "0"), v + 1));
+    applyPreciseSelection();
+  });
+}
+
+/* Show precise panel when user touches main slider */
+function bindMainSliderToPrecise() {
+  if (!slider) return;
+
+  // When user starts touching/dragging, show panel + sync
+  slider.addEventListener("pointerdown", () => {
+    showPrecisePanel();
+    syncPreciseToMain();
+  });
+  slider.addEventListener("touchstart", () => {
+    showPrecisePanel();
+    syncPreciseToMain();
+  }, { passive: true });
+
+  // While moving, keep panel synced
+  slider.addEventListener("input", () => {
+    showPrecisePanel();
+    syncPreciseToMain();
+  });
+
+  // When user finishes, hide soon
+  slider.addEventListener("pointerup", () => hidePrecisePanelSoon(800));
+  slider.addEventListener("touchend", () => hidePrecisePanelSoon(800));
+  slider.addEventListener("change", () => hidePrecisePanelSoon(800));
+}
+bindMainSliderToPrecise();
+
+/* =========================================================
+   Popups
+   ========================================================= */
 function buildPopupHTML(props, geom) {
   const zoneName = (props.zone_name || "").trim();
   const borough = (props.borough || "").trim();
@@ -750,6 +963,9 @@ function renderFrame(frame) {
   if (manhattanMode) applyManhattanLocalView(currentFrame);
 
   timeLabel.textContent = formatNYCLabel(currentFrame.time);
+
+  // Keep precise panel title synced when frames change via auto tick / precise
+  if (timeline.length) syncPreciseToMain();
 
   if (geoLayer) {
     geoLayer.remove();
@@ -806,6 +1022,9 @@ async function loadTimeline() {
 
   minutesOfWeek = timeline.map(minuteOfWeekFromIso);
 
+  // Build day -> indices for precise slider
+  rebuildDayIndexMap();
+
   slider.min = "0";
   slider.max = String(timeline.length - 1);
   slider.step = "1";
@@ -814,6 +1033,9 @@ async function loadTimeline() {
   const idx = pickClosestIndex(minutesOfWeek, nowMinWeek);
   slider.value = String(idx);
 
+  // Init precise panel slider values (hidden until touch)
+  syncPreciseToMain();
+
   await loadFrame(idx);
 }
 
@@ -821,6 +1043,7 @@ map.on("zoomend", () => {
   if (currentFrame) renderFrame(currentFrame);
 });
 
+/* Main slider manual control (unchanged) */
 let sliderDebounce = null;
 slider.addEventListener("input", () => {
   lastUserSliderTs = Date.now();
@@ -977,7 +1200,7 @@ function startLocationWatch() {
 
       if (currentFrame) updateRecommendation(currentFrame);
 
-      // NEW: refresh weather faster once we have real user location
+      // weather refresh sooner after real GPS
       scheduleWeatherUpdateSoon();
     },
     (err) => {
@@ -1040,9 +1263,7 @@ document.addEventListener("visibilitychange", () => {
 });
 
 /* =========================================================
-   NEW: WEATHER BADGE + FX (no API key)
-   - Uses Open-Meteo current weather
-   - Drives: badge text + rain/snow particles + night theme
+   WEATHER BADGE + FX (no API key) — unchanged from your code
    ========================================================= */
 const weatherBadge = document.getElementById("weatherBadge");
 const wxCanvas = document.getElementById("wxCanvas");
@@ -1062,7 +1283,6 @@ let wxParticles = [];
 let wxAnimRunning = false;
 let wxNextUpdateTimer = null;
 
-// Resize canvas to full screen
 function wxResizeCanvas() {
   if (!wxCanvas) return;
   const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
@@ -1075,20 +1295,12 @@ function wxResizeCanvas() {
 window.addEventListener("resize", wxResizeCanvas);
 wxResizeCanvas();
 
-// Simple mapping from Open-Meteo weather_code
 function wxDescribe(code) {
-  // Minimal set (enough to choose effects)
-  // 0 clear, 1-3 mainly clear/partly cloudy/overcast
-  // 45-48 fog
-  // 51-57 drizzle, 61-67 rain, 80-82 rain showers
-  // 71-77 snow, 85-86 snow showers
-  // 95-99 thunderstorm
   const c = Number(code);
   if (c === 0) return { text: "Clear", icon: "☀️", kind: "none", intensity: 0 };
   if (c >= 1 && c <= 3) return { text: "Cloudy", icon: "⛅", kind: "none", intensity: 0 };
   if (c === 45 || c === 48) return { text: "Fog", icon: "🌫️", kind: "none", intensity: 0 };
   if ((c >= 51 && c <= 57) || (c >= 61 && c <= 67) || (c >= 80 && c <= 82)) {
-    // rain / drizzle
     const intensity = (c >= 65 || c >= 81) ? 0.85 : (c >= 63 ? 0.65 : 0.45);
     return { text: "Rain", icon: "🌧️", kind: "rain", intensity };
   }
@@ -1120,13 +1332,11 @@ function setWeatherBadge(icon, text) {
 }
 
 function getWeatherLatLng() {
-  // Prefer user location if available; fallback to NYC center
   const lat = userLatLng?.lat ?? 40.7128;
   const lng = userLatLng?.lng ?? -74.0060;
   return { lat, lng };
 }
 
-// Throttle helper: if we just updated recently, don’t spam
 function scheduleWeatherUpdateSoon() {
   if (wxNextUpdateTimer) return;
   wxNextUpdateTimer = setTimeout(() => {
@@ -1135,21 +1345,8 @@ function scheduleWeatherUpdateSoon() {
   }, 2500);
 }
 
-// Main fetch (Open-Meteo; no key)
 async function updateWeatherNow() {
   const { lat, lng } = getWeatherLatLng();
-
-  // If location didn't change much, we can skip frequent refetch
-  const samePlace =
-    wxState.lastLat != null &&
-    wxState.lastLng != null &&
-    Math.abs(wxState.lastLat - lat) < 0.05 &&
-    Math.abs(wxState.lastLng - lng) < 0.05;
-
-  // If same place and badge already filled, don't update too aggressively
-  if (samePlace && wxState.tempF != null && wxState.label && Date.now() % 2 === 0) {
-    // tiny jittered skip; keeps it light
-  }
 
   wxState.lastLat = lat;
   wxState.lastLng = lng;
@@ -1178,32 +1375,20 @@ async function updateWeatherNow() {
     wxState.isNight = !isDay;
     wxState.label = label;
 
-    // Theme toggles
     setBodyTheme({ isNight: wxState.isNight, isSunny: desc.text === "Clear" });
-
-    // Badge
     setWeatherBadge(desc.icon, label);
 
-    // FX
     updateWxParticlesForState();
     ensureWxAnimationRunning();
   } catch (e) {
-    // Fail safely: keep app working
     setWeatherBadge("⛅", "Weather unavailable");
-    // Don't force theme/effects if API fails
   }
 }
 
-// Update every 10 minutes (light)
 setInterval(() => {
   updateWeatherNow().catch(() => {});
 }, 10 * 60 * 1000);
 
-/* =========================================================
-   NEW: Canvas particle system (rain/snow)
-   - lightweight
-   - only runs when kind != "none"
-   ========================================================= */
 function updateWxParticlesForState() {
   if (!wxCanvas || !wxCtx) return;
 
@@ -1215,7 +1400,6 @@ function updateWxParticlesForState() {
     return;
   }
 
-  // Particle count based on intensity + screen size
   const base = Math.floor((window.innerWidth * window.innerHeight) / 45000);
   const count = Math.max(40, Math.min(240, Math.floor(base * (kind === "rain" ? 2.4 : 1.6) * (0.6 + intensity))));
 
@@ -1242,7 +1426,6 @@ function makeParticle(kind) {
     };
   }
 
-  // snow
   return {
     kind: "snow",
     x: Math.random() * w,
@@ -1345,6 +1528,4 @@ loadTimeline().catch((err) => {
 });
 
 startLocationWatch();
-
-// NEW: first weather update immediately (NYC fallback if no GPS yet)
 updateWeatherNow().catch(() => {});
