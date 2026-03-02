@@ -136,48 +136,49 @@
       font-weight: 700;
     }
 
-    /* ---------- Bottom slider (THINNER + LOWERED) ---------- */
+    /* ---------- Bottom slider (thin + ALWAYS visible with safe-area) ---------- */
     .sliderWrap {
       position: absolute;
       left: 10px;
       right: 10px;
 
-      /* CHANGED: lowered a bit more (closer to bottom) */
-      bottom: calc(4px + env(safe-area-inset-bottom));
+      /* CHANGED: lower the whole box slightly closer to the bottom */
+      bottom: calc(4px + env(safe-area-inset-bottom)); /* was 10px */
 
       z-index: 1000;
       background: rgba(255,255,255,0.92);
       border-radius: 14px;
       box-shadow: 0 6px 18px rgba(0,0,0,0.15);
 
-      /* CHANGED: ~50% thinner */
-      padding: 3px 10px;
+      /* CHANGED: ~30% thinner overall by reducing vertical padding */
+      padding: 4px 10px; /* was 6px 10px */
 
       font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
     }
-
-    /* CHANGED: slightly smaller to reduce total height (keeps same style) */
     .timeLabel {
-      font-size: 14px;
+      /* CHANGED: slightly smaller label to help reduce height */
+      font-size: 14px; /* was 16px */
       font-weight: 950;
-      margin: 0 0 2px 0;
-      line-height: 1.05;
-    }
 
-    /* CHANGED: thinner track area */
+      /* CHANGED: less space under time label */
+      margin: 0 0 2px 0; /* was 0 0 4px 0 */
+    }
     input[type="range"] {
       width: 100%;
-      height: 12px;
+
+      /* CHANGED: thinner slider track area (~30% reduction) */
+      height: 13px; /* was 18px */
+
       margin: 0;
     }
 
-    /* CHANGED: tighter spacing */
     .centerBtnInBar{
-      margin-top: 3px;
+      /* CHANGED: reduce extra vertical space */
+      margin-top: 4px; /* was 6px */
+
       display:flex;
       justify-content:flex-end;
     }
-
     .toggleBtnSmall{
       border:none;
       border-radius: 999px;
