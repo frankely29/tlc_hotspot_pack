@@ -23,8 +23,7 @@
     #map { height: 100vh; width: 100vw; }
 
     /* =========================================================
-       WEATHER FX OVERLAY (NEW)
-       - Canvas sits above map + labels, below UI panels
+       WEATHER FX OVERLAY
        ========================================================= */
     #wxCanvas{
       position: absolute;
@@ -34,15 +33,11 @@
     }
 
     /* =========================================================
-       NIGHT THEME (NEW)
-       - We darken the map tiles only (NOT the UI)
-       - This is a visual effect only; no tile changes needed
+       NIGHT THEME (tiles only)
        ========================================================= */
     body.night .leaflet-tile-pane{
       filter: brightness(0.65) contrast(1.08) saturate(0.85);
     }
-
-    /* OPTIONAL: subtle “sunny” lift on day */
     body.sunny .leaflet-tile-pane{
       filter: brightness(1.03) saturate(1.08);
     }
@@ -162,8 +157,114 @@
     }
 
     /* =========================================================
-       Bottom slider (keep your layout) + Weather badge (NEW)
-       - Weather badge is small and stays inside bottom box
+       PRECISE SLIDER PANEL (RESTORED)
+       - Pops up when user drags the main slider
+       - Lets you scrub precisely within a single day
+       ========================================================= */
+    .preciseWrap{
+      position: absolute;
+      left: 10px;
+      right: 10px;
+      bottom: calc(78px + env(safe-area-inset-bottom)); /* sits above bottom sliderWrap */
+      z-index: 1000;
+      pointer-events: none; /* enabled only when visible */
+    }
+    .preciseWrap.show{
+      pointer-events: auto;
+    }
+    .precisePanel{
+      background: rgba(255,255,255,0.94);
+      border-radius: 14px;
+      box-shadow: 0 10px 24px rgba(0,0,0,0.18);
+      border: 1px solid rgba(0,0,0,0.10);
+      padding: 10px 10px 8px 10px;
+      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
+      transform: translateY(8px);
+      opacity: 0;
+      transition: opacity 120ms ease, transform 120ms ease;
+    }
+    .preciseWrap.show .precisePanel{
+      opacity: 1;
+      transform: translateY(0px);
+    }
+    .preciseHdr{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      margin-bottom: 6px;
+    }
+    .preciseTitle{
+      font-size: 12px;
+      font-weight: 950;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 68vw;
+    }
+    .preciseClose{
+      border: none;
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-weight: 950;
+      font-size: 12px;
+      cursor: pointer;
+      background: rgba(0,0,0,0.06);
+    }
+    .preciseClose:active{ transform: scale(0.98); }
+
+    .preciseRow{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:8px;
+      margin-bottom: 6px;
+      flex-wrap: wrap;
+    }
+
+    .daySelect{
+      border: 1px solid rgba(0,0,0,0.14);
+      background: rgba(255,255,255,0.9);
+      border-radius: 10px;
+      padding: 6px 8px;
+      font-weight: 900;
+      font-size: 12px;
+      outline: none;
+    }
+
+    .stepBtns{
+      display:flex;
+      align-items:center;
+      gap:8px;
+    }
+    .stepBtn{
+      border:none;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-weight: 950;
+      font-size: 12px;
+      cursor:pointer;
+      background: rgba(0,160,255,0.12);
+      color:#0b2a3a;
+    }
+    .stepBtn:active{ transform: scale(0.98); }
+
+    .preciseRange{
+      width: 100%;
+      height: 22px; /* slightly bigger for easier precision */
+      margin: 0;
+    }
+
+    .preciseHint{
+      margin-top: 6px;
+      font-size: 11px;
+      font-weight: 800;
+      opacity: 0.72;
+      line-height: 1.2;
+    }
+
+    /* =========================================================
+       Bottom slider + Weather badge
        ========================================================= */
     .sliderWrap {
       position: absolute;
@@ -183,7 +284,6 @@
       margin: 0 0 4px 0;
     }
 
-    /* NEW: row above slider for small weather indicator */
     .sliderTopRow{
       display:flex;
       align-items:center;
@@ -192,7 +292,6 @@
       margin-bottom: 4px;
     }
 
-    /* NEW: weather badge */
     .weatherBadge{
       display:inline-flex;
       align-items:center;
@@ -359,8 +458,41 @@
 <body>
   <div id="map"></div>
 
-  <!-- NEW: weather canvas overlay -->
+  <!-- weather canvas overlay -->
   <canvas id="wxCanvas"></canvas>
+
+  <!-- PRECISE slider panel (RESTORED) -->
+  <div id="preciseWrap" class="preciseWrap" aria-label="Precise time slider">
+    <div class="precisePanel">
+      <div class="preciseHdr">
+        <div id="preciseTitle" class="preciseTitle">Precise: …</div>
+        <button id="preciseClose" class="preciseClose" type="button">Close</button>
+      </div>
+
+      <div class="preciseRow">
+        <select id="preciseDay" class="daySelect" aria-label="Day">
+          <option value="0">Mon</option>
+          <option value="1">Tue</option>
+          <option value="2">Wed</option>
+          <option value="3">Thu</option>
+          <option value="4">Fri</option>
+          <option value="5">Sat</option>
+          <option value="6">Sun</option>
+        </select>
+
+        <div class="stepBtns">
+          <button id="preciseMinus" class="stepBtn" type="button">−</button>
+          <button id="precisePlus" class="stepBtn" type="button">+</button>
+        </div>
+      </div>
+
+      <input id="preciseSlider" class="preciseRange" type="range" min="0" max="0" value="0" step="1" />
+
+      <div class="preciseHint">
+        Drag here for precise moves inside the selected day. Main slider still covers the whole week.
+      </div>
+    </div>
+  </div>
 
   <div id="legend" class="legend" aria-label="Demand legend">
     <div class="legendHeader">
@@ -391,7 +523,6 @@
   </div>
 
   <div class="sliderWrap">
-    <!-- NEW: time + weather in same row -->
     <div class="sliderTopRow">
       <div id="timeLabel" class="timeLabel">Loading…</div>
       <div id="weatherBadge" class="weatherBadge" title="Local weather">
