@@ -50,7 +50,7 @@ const LS_KEY_MANHATTAN = "manhattan_mode_enabled";
 const MANHATTAN_PAY_WEIGHT = 0.52;
 const MANHATTAN_VOL_WEIGHT = 0.48;
 const MANHATTAN_GLOBAL_PENALTY = 0.99;
-const MANHATTAN_MIN_ZONES = 10;
+const MANHATTAN_MIN_ZONES = 40;
 
 /* =========================================================
    MANHATTAN MODE — UPTOWN EXCLUSION (ONLY CHANGE)
