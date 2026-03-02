@@ -22,6 +22,31 @@
     html, body { height: 100%; margin: 0; padding: 0; }
     #map { height: 100vh; width: 100vw; }
 
+    /* =========================================================
+       WEATHER FX OVERLAY (NEW)
+       - Canvas sits above map + labels, below UI panels
+       ========================================================= */
+    #wxCanvas{
+      position: absolute;
+      inset: 0;
+      z-index: 700; /* above overlays (400/650) but below legend/slider (1000) */
+      pointer-events: none;
+    }
+
+    /* =========================================================
+       NIGHT THEME (NEW)
+       - We darken the map tiles only (NOT the UI)
+       - This is a visual effect only; no tile changes needed
+       ========================================================= */
+    body.night .leaflet-tile-pane{
+      filter: brightness(0.65) contrast(1.08) saturate(0.85);
+    }
+
+    /* OPTIONAL: subtle “sunny” lift on day */
+    body.sunny .leaflet-tile-pane{
+      filter: brightness(1.03) saturate(1.08);
+    }
+
     /* ---------- Legend (small + minimize) ---------- */
     .legend {
       position: absolute;
@@ -136,46 +161,65 @@
       font-weight: 700;
     }
 
-    /* ---------- Bottom slider (thin + ALWAYS visible with safe-area) ---------- */
+    /* =========================================================
+       Bottom slider (keep your layout) + Weather badge (NEW)
+       - Weather badge is small and stays inside bottom box
+       ========================================================= */
     .sliderWrap {
       position: absolute;
       left: 10px;
       right: 10px;
-
-      /* CHANGED: lower the whole box slightly closer to the bottom */
-      bottom: calc(4px + env(safe-area-inset-bottom)); /* was 10px */
-
+      bottom: calc(6px + env(safe-area-inset-bottom));
       z-index: 1000;
       background: rgba(255,255,255,0.92);
       border-radius: 14px;
       box-shadow: 0 6px 18px rgba(0,0,0,0.15);
-
-      /* CHANGED: ~30% thinner overall by reducing vertical padding */
-      padding: 4px 10px; /* was 6px 10px */
-
+      padding: 6px 10px;
       font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
     }
     .timeLabel {
-      /* CHANGED: slightly smaller label to help reduce height */
-      font-size: 14px; /* was 16px */
+      font-size: 16px;
       font-weight: 950;
-
-      /* CHANGED: less space under time label */
-      margin: 0 0 2px 0; /* was 0 0 4px 0 */
+      margin: 0 0 4px 0;
     }
+
+    /* NEW: row above slider for small weather indicator */
+    .sliderTopRow{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      margin-bottom: 4px;
+    }
+
+    /* NEW: weather badge */
+    .weatherBadge{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(0,0,0,0.14);
+      background: rgba(255,255,255,0.80);
+      font-size: 11px;
+      font-weight: 900;
+      opacity: 0.95;
+      white-space: nowrap;
+      max-width: 46vw;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .weatherBadge .wxIcon{ font-size: 12px; }
+    .weatherBadge .wxTxt{ opacity: 0.9; }
+
     input[type="range"] {
       width: 100%;
-
-      /* CHANGED: thinner slider track area (~30% reduction) */
-      height: 13px; /* was 18px */
-
+      height: 18px;
       margin: 0;
     }
 
     .centerBtnInBar{
-      /* CHANGED: reduce extra vertical space */
-      margin-top: 4px; /* was 6px */
-
+      margin-top: 6px;
       display:flex;
       justify-content:flex-end;
     }
@@ -231,7 +275,7 @@
     .zone-label.z12 .br,
     .zone-label.z13 .br,
     .zone-label.z14 .br { font-size: 0px; padding: 0; border: 0; }
-    .zone-label.z15 .br { font-size: 03px; } /* or 9px */
+    .zone-label.z15 .br { font-size: 03px; }
 
     /* ---------- You arrow: force on top of EVERYTHING ---------- */
     .leaflet-marker-pane { z-index: 800 !important; }
@@ -239,10 +283,7 @@
     .leaflet-overlay-pane { z-index: 400 !important; }
 
     /* =========================================================
-       GPS ARROW (UPDATED: more pointed “direction” look)
-       - Longer, narrower triangle (reads as a forward pointer)
-       - Inner highlight wedge helps your eyes see the “front”
-       - Rotation still handled by app.js via transform on #navWrap
+       GPS ARROW (your current)
        ========================================================= */
     .navArrowWrap{
       width: 34px;
@@ -251,8 +292,6 @@
       transform-origin: 50% 50%;
       will-change: transform, filter, box-shadow;
     }
-
-    /* Main arrow body (tall + narrow) */
     .navArrow{
       position: absolute;
       left: 50%;
@@ -262,11 +301,9 @@
       transform: translate(-50%, -62%);
       border-left: 6px solid transparent;
       border-right: 6px solid transparent;
-      border-bottom: 26px solid #111; /* longer = more “pointed forward” */
+      border-bottom: 26px solid #111;
       filter: drop-shadow(0 2px 2px rgba(0,0,0,0.35));
     }
-
-    /* Inner “nose” highlight to emphasize direction */
     .navArrow::after{
       content:"";
       position:absolute;
@@ -279,8 +316,6 @@
       border-right: 3px solid transparent;
       border-bottom: 14px solid rgba(255,255,255,0.25);
     }
-
-    /* Slight base cap to look less like a perfect triangle */
     .navArrow::before{
       content:"";
       position:absolute;
@@ -293,7 +328,6 @@
       background: rgba(0,0,0,0.25);
       filter: blur(0.2px);
     }
-
     .navMoving .navArrow{
       filter:
         drop-shadow(0 2px 2px rgba(0,0,0,0.35))
@@ -325,6 +359,9 @@
 <body>
   <div id="map"></div>
 
+  <!-- NEW: weather canvas overlay -->
+  <canvas id="wxCanvas"></canvas>
+
   <div id="legend" class="legend" aria-label="Demand legend">
     <div class="legendHeader">
       <h3>Demand Colors</h3>
@@ -354,8 +391,17 @@
   </div>
 
   <div class="sliderWrap">
-    <div id="timeLabel" class="timeLabel">Loading…</div>
+    <!-- NEW: time + weather in same row -->
+    <div class="sliderTopRow">
+      <div id="timeLabel" class="timeLabel">Loading…</div>
+      <div id="weatherBadge" class="weatherBadge" title="Local weather">
+        <span class="wxIcon">⛅</span>
+        <span class="wxTxt">Weather…</span>
+      </div>
+    </div>
+
     <input id="slider" type="range" min="0" max="0" value="0" step="1" />
+
     <div class="centerBtnInBar">
       <button id="btnCenter" class="toggleBtnSmall on" type="button">Auto-center: ON</button>
     </div>
