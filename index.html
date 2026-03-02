@@ -22,6 +22,31 @@
     html, body { height: 100%; margin: 0; padding: 0; }
     #map { height: 100vh; width: 100vw; }
 
+    /* =========================================================
+       WEATHER FX OVERLAY (NEW)
+       - Canvas sits above map + labels, below UI panels
+       ========================================================= */
+    #wxCanvas{
+      position: absolute;
+      inset: 0;
+      z-index: 700; /* above overlays (400/650) but below legend/slider (1000) */
+      pointer-events: none;
+    }
+
+    /* =========================================================
+       NIGHT THEME (NEW)
+       - We darken the map tiles only (NOT the UI)
+       - This is a visual effect only; no tile changes needed
+       ========================================================= */
+    body.night .leaflet-tile-pane{
+      filter: brightness(0.65) contrast(1.08) saturate(0.85);
+    }
+
+    /* OPTIONAL: subtle “sunny” lift on day */
+    body.sunny .leaflet-tile-pane{
+      filter: brightness(1.03) saturate(1.08);
+    }
+
     /* ---------- Legend (small + minimize) ---------- */
     .legend {
       position: absolute;
@@ -136,32 +161,65 @@
       font-weight: 700;
     }
 
-    /* ---------- Bottom slider (YOUR CURRENT BASE) ---------- */
+    /* =========================================================
+       Bottom slider (keep your layout) + Weather badge (NEW)
+       - Weather badge is small and stays inside bottom box
+       ========================================================= */
     .sliderWrap {
       position: absolute;
       left: 10px;
       right: 10px;
-      bottom: calc(6px + env(safe-area-inset-bottom)); /* slightly lower */
+      bottom: calc(6px + env(safe-area-inset-bottom));
       z-index: 1000;
       background: rgba(255,255,255,0.92);
       border-radius: 14px;
       box-shadow: 0 6px 18px rgba(0,0,0,0.15);
-      padding: 4px 10px; /* thinner */
+      padding: 6px 10px;
       font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
     }
     .timeLabel {
       font-size: 16px;
       font-weight: 950;
-      margin: 0 0 2px 0;
+      margin: 0 0 4px 0;
     }
+
+    /* NEW: row above slider for small weather indicator */
+    .sliderTopRow{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      margin-bottom: 4px;
+    }
+
+    /* NEW: weather badge */
+    .weatherBadge{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(0,0,0,0.14);
+      background: rgba(255,255,255,0.80);
+      font-size: 11px;
+      font-weight: 900;
+      opacity: 0.95;
+      white-space: nowrap;
+      max-width: 46vw;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .weatherBadge .wxIcon{ font-size: 12px; }
+    .weatherBadge .wxTxt{ opacity: 0.9; }
+
     input[type="range"] {
       width: 100%;
-      height: 14px; /* thinner track area */
+      height: 18px;
       margin: 0;
     }
 
     .centerBtnInBar{
-      margin-top: 4px;
+      margin-top: 6px;
       display:flex;
       justify-content:flex-end;
     }
@@ -219,12 +277,14 @@
     .zone-label.z14 .br { font-size: 0px; padding: 0; border: 0; }
     .zone-label.z15 .br { font-size: 03px; }
 
-    /* ---------- You arrow panes ---------- */
+    /* ---------- You arrow: force on top of EVERYTHING ---------- */
     .leaflet-marker-pane { z-index: 800 !important; }
     .leaflet-tooltip-pane { z-index: 650 !important; }
     .leaflet-overlay-pane { z-index: 400 !important; }
 
-    /* ---------- GPS arrow ---------- */
+    /* =========================================================
+       GPS ARROW (your current)
+       ========================================================= */
     .navArrowWrap{
       width: 34px;
       height: 34px;
@@ -274,6 +334,7 @@
         drop-shadow(0 0 6px rgba(0,160,255,0.95))
         drop-shadow(0 0 12px rgba(0,160,255,0.75));
     }
+
     @keyframes pulseRing {
       0%   { transform: translate(-50%, -50%) scale(0.8); opacity: 0.75; }
       70%  { transform: translate(-50%, -50%) scale(1.25); opacity: 0.05; }
@@ -292,111 +353,14 @@
       animation: pulseRing 1.5s ease-out infinite;
       pointer-events:none;
     }
-
-    /* =========================================================
-       PRECISION SLIDER POPUP (RESTORED FEATURE)
-       - Opens while sliding for fine control
-       - Bigger thumb + step buttons
-       - Does NOT remove the week slider (still there)
-       ========================================================= */
-    .preciseOverlay{
-      position: fixed;
-      inset: 0;
-      z-index: 5000;
-      display: none;
-      align-items: flex-end;
-      justify-content: center;
-      background: rgba(0,0,0,0.18);
-      backdrop-filter: blur(1px);
-      -webkit-backdrop-filter: blur(1px);
-      padding: 0 10px calc(10px + env(safe-area-inset-bottom));
-    }
-    .preciseOverlay.show{ display:flex; }
-
-    .preciseCard{
-      width: min(560px, 100%);
-      background: rgba(255,255,255,0.96);
-      border-radius: 16px;
-      box-shadow: 0 18px 40px rgba(0,0,0,0.22);
-      border: 1px solid rgba(0,0,0,0.10);
-      padding: 10px 12px 12px 12px;
-      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
-    }
-    .preciseTop{
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap:10px;
-      margin-bottom: 8px;
-    }
-    .preciseTitle{
-      font-weight: 950;
-      font-size: 12px;
-      opacity: 0.85;
-    }
-    .preciseTime{
-      font-weight: 950;
-      font-size: 13px;
-    }
-    .preciseClose{
-      border:none;
-      border-radius: 999px;
-      padding: 6px 10px;
-      font-weight: 950;
-      font-size: 12px;
-      background: rgba(0,0,0,0.06);
-      cursor:pointer;
-    }
-    .preciseClose:active{ transform: scale(0.98); }
-
-    .preciseSlider{
-      width: 100%;
-      height: 34px;
-      margin: 4px 0 8px 0;
-    }
-
-    .preciseControls{
-      display:flex;
-      gap:8px;
-      justify-content:space-between;
-      align-items:center;
-    }
-    .stepGroup{
-      display:flex;
-      gap:8px;
-      align-items:center;
-      flex-wrap:wrap;
-    }
-    .stepBtn{
-      border:none;
-      border-radius: 999px;
-      padding: 8px 12px;
-      font-weight: 950;
-      font-size: 12px;
-      background: rgba(0,160,255,0.12);
-      color: #0b2a3a;
-      cursor:pointer;
-      touch-action: manipulation;
-      -webkit-tap-highlight-color: transparent;
-    }
-    .stepBtn.alt{
-      background: rgba(0,0,0,0.06);
-      color: #111;
-    }
-    .stepBtn:active{ transform: scale(0.98); }
-
-    .preciseHint{
-      font-size: 11px;
-      font-weight: 800;
-      opacity: 0.65;
-      text-align: right;
-      line-height: 1.1;
-    }
   </style>
 </head>
 
 <body>
   <div id="map"></div>
+
+  <!-- NEW: weather canvas overlay -->
+  <canvas id="wxCanvas"></canvas>
 
   <div id="legend" class="legend" aria-label="Demand legend">
     <div class="legendHeader">
@@ -427,37 +391,19 @@
   </div>
 
   <div class="sliderWrap">
-    <div id="timeLabel" class="timeLabel">Loading…</div>
+    <!-- NEW: time + weather in same row -->
+    <div class="sliderTopRow">
+      <div id="timeLabel" class="timeLabel">Loading…</div>
+      <div id="weatherBadge" class="weatherBadge" title="Local weather">
+        <span class="wxIcon">⛅</span>
+        <span class="wxTxt">Weather…</span>
+      </div>
+    </div>
+
     <input id="slider" type="range" min="0" max="0" value="0" step="1" />
+
     <div class="centerBtnInBar">
       <button id="btnCenter" class="toggleBtnSmall on" type="button">Auto-center: ON</button>
-    </div>
-  </div>
-
-  <!-- =========================================================
-       Precision Slider Overlay (RESTORED FEATURE)
-       ========================================================= -->
-  <div id="preciseOverlay" class="preciseOverlay" aria-hidden="true">
-    <div class="preciseCard" role="dialog" aria-label="Precise timeline control">
-      <div class="preciseTop">
-        <div>
-          <div class="preciseTitle">Precise Time</div>
-          <div id="preciseTime" class="preciseTime">—</div>
-        </div>
-        <button id="preciseClose" class="preciseClose" type="button">Done</button>
-      </div>
-
-      <input id="preciseSlider" class="preciseSlider" type="range" min="0" max="0" value="0" step="1" />
-
-      <div class="preciseControls">
-        <div class="stepGroup">
-          <button id="stepBackBig" class="stepBtn alt" type="button">-2h</button>
-          <button id="stepBack" class="stepBtn" type="button">-20m</button>
-          <button id="stepFwd" class="stepBtn" type="button">+20m</button>
-          <button id="stepFwdBig" class="stepBtn alt" type="button">+2h</button>
-        </div>
-        <div class="preciseHint">Drag big slider<br/>or tap steps</div>
-      </div>
     </div>
   </div>
 
